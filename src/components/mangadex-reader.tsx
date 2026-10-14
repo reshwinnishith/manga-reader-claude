@@ -5,9 +5,10 @@ import { useEffect, useRef, useState } from "react";
 import { useUserData } from "@/state/use-user-data";
 import { seriesFromSaved } from "@/lib/series-from-saved";
 
-export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }: { id: string; group: string; seriesId?: string; chapterNumber?: string }) {
+export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "", previous, next }: { id: string; group: string; seriesId?: string; chapterNumber?: string; previous?: { id: string; number: string }; next?: { id: string; number: string } }) {
   const { data, actions } = useUserData();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const adjacentUrl = (chapter: { id: string; number: string }) => `/mangadex/read/${chapter.id}?series=${encodeURIComponent(seriesId)}&chapter=${encodeURIComponent(chapter.number)}`;
   const [count, setCount] = useState(0);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"scroll" | "paged">("scroll");
@@ -82,6 +83,10 @@ export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }:
           </nav>
         </div>
       ))}
+      {count > 0 && <nav aria-label="Chapter navigation" style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: 20 }}>
+        {previous ? <Link href={adjacentUrl(previous)} style={{ color: "inherit" }}>← Chapter {previous.number}</Link> : <span />}
+        {next ? <Link href={adjacentUrl(next)} style={{ color: "inherit" }}>Chapter {next.number} →</Link> : <span />}
+      </nav>}
       <footer style={{ textAlign: "center", padding: 20, fontSize: 12 }}>Powered by MangaDex · No chapter downloads stored</footer>
     </main>
   );
