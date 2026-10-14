@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { defaultReaderMode, type Chapter, type ReaderMode, type Series } from "@/domain/types";
 import { formatChapterLabel, formatChapterNumber } from "@/lib/format";
+import { isEndIndex, pageForIndex, pickVerticalIndex } from "@/lib/reader-position";
 import { getChapterStartPage } from "@/lib/selectors";
 import { useUserData } from "@/state/use-user-data";
 import { BackIcon, PagedIcon, ScrollIcon, SkipNextIcon, SkipPrevIcon } from "./icons";
 import { PlaceholderPage } from "./placeholder-page";
+
+/** Ignore forward gestures this soon after arriving on the end card (prevents skipping a chapter). */
+const END_CARD_GRACE_MS = 450;
 
 interface ReaderViewProps {
   series: Series;
@@ -42,7 +47,7 @@ export function ReaderView({ series, chapterId }: ReaderViewProps) {
 
   return (
     <ReaderSession
-      key={`${chapter.id}`}
+      key={chapter.id}
       series={series}
       chapter={chapter}
       prev={series.chapters[chapterIndex - 1]}
@@ -58,36 +63,74 @@ interface SessionProps {
   next?: Chapter;
 }
 
+/**
+ * The reader tracks ONE position per chapter: `index`.
+ *   0 .. pageCount-1  -> a page
+ *   pageCount         -> the end of the chapter (end card showing / final page scrolled past)
+ * Both reader modes read and write this same value, so switching modes, going
+ * backwards, or reopening a chapter can never disagree about completion.
+ * Only reaching `pageCount` completes a chapter; see `recordProgress`.
+ */
 function ReaderSession({ series, chapter, prev, next }: SessionProps) {
+  const router = useRouter();
   const { data, actions } = useUserData();
   const pageCount = chapter.pageCount;
+  const lastPage = pageCount - 1;
   const mode: ReaderMode = data?.readerModes[series.id] ?? defaultReaderMode(series.type);
+  const nextHref = next ? `/read/${series.id}/${next.id}` : null;
 
   // The saved page is read once; afterwards local state is the source of truth.
-  const [page, setPage] = useState(() => getChapterStartPage(chapter, data?.progress[series.id]));
+  const [index, setIndex] = useState(() => getChapterStartPage(chapter, data?.progress[series.id]));
   const [controls, setControls] = useState(true);
+  const atEnd = isEndIndex(index, pageCount);
 
-  // Persist progress whenever the page changes. The paged "end card" sits one
-  // past the last page and counts as the last page.
-  const lastPage = pageCount - 1;
+  // Persist on every position change (the store ignores unchanged positions).
   useEffect(() => {
-    actions.recordProgress(series, chapter.id, Math.min(page, lastPage));
-  }, [actions, series, chapter.id, page, lastPage]);
+    actions.recordProgress(series, chapter.id, pageForIndex(index, pageCount), isEndIndex(index, pageCount));
+  }, [actions, series, chapter.id, index, pageCount]);
+
+  // Remember when the end card appeared so a quick extra tap can't skip the chapter.
+  const arrivedAtEnd = useRef(0);
+  useEffect(() => {
+    if (atEnd) arrivedAtEnd.current = Date.now();
+  }, [atEnd]);
+
+  // While reading, the page behind must never scroll or rubber-band.
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add("reader-open");
+    return () => html.classList.remove("reader-open");
+  }, []);
 
   const hideControls = useCallback(() => setControls(false), []);
   const toggleControls = useCallback(() => setControls((v) => !v), []);
 
-  const maxPage = mode === "paged-rtl" ? pageCount : lastPage; // paged has an end card
   const goTo = useCallback(
     (target: number) => {
-      const clamped = Math.max(0, Math.min(target, maxPage));
-      setPage(clamped);
+      const clamped = Math.max(0, Math.min(target, pageCount));
+      setIndex(clamped);
       if (mode === "vertical") {
-        document.getElementById(`reader-page-${clamped}`)?.scrollIntoView({ block: "start" });
+        const el = document.getElementById(isEndIndex(clamped, pageCount) ? "reader-end" : `reader-page-${clamped}`);
+        el?.scrollIntoView({ block: "start" });
       }
     },
-    [maxPage, mode],
+    [mode, pageCount],
   );
+
+  /** Forward in reading order. From the end card this continues to the next chapter. */
+  const forward = useCallback(() => {
+    hideControls();
+    if (index < pageCount) {
+      goTo(index + 1);
+    } else if (nextHref && Date.now() - arrivedAtEnd.current > END_CARD_GRACE_MS) {
+      router.push(nextHref);
+    }
+  }, [index, pageCount, goTo, hideControls, nextHref, router]);
+
+  const back = useCallback(() => {
+    hideControls();
+    goTo(index - 1);
+  }, [index, goTo, hideControls]);
 
   // Keyboard: arrow keys follow reading direction (right-to-left in paged mode).
   useEffect(() => {
@@ -100,26 +143,23 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
       if (mode !== "paged-rtl") return;
       if (e.key === "ArrowLeft" || (e.key === " " && !e.shiftKey)) {
         e.preventDefault();
-        hideControls();
-        goTo(page + 1);
+        forward();
       } else if (e.key === "ArrowRight" || (e.key === " " && e.shiftKey)) {
         e.preventDefault();
-        hideControls();
-        goTo(page - 1);
+        back();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, page, goTo, hideControls, toggleControls]);
+  }, [mode, forward, back, toggleControls]);
 
   const toggleMode = () =>
     actions.setReaderMode(series.id, mode === "vertical" ? "paged-rtl" : "vertical");
 
-  const shownPage = Math.min(page, lastPage);
-  const isEnd = mode === "paged-rtl" && page >= pageCount;
+  const shownPage = pageForIndex(index, pageCount);
 
   return (
-    <div className="reader" data-mode={mode} data-controls={controls ? "visible" : "hidden"}>
+    <div className="reader" data-mode={mode} data-controls={controls ? "visible" : "hidden"} data-at-end={atEnd}>
       {!controls && (
         <button type="button" className="reader__show-controls" onClick={toggleControls}>
           Show controls
@@ -132,9 +172,7 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
         </Link>
         <div className="reader__titles">
           <span className="reader__series">{series.title}</span>
-          <span className="reader__chapter">
-            {formatChapterLabel(chapter)}
-          </span>
+          <span className="reader__chapter">{formatChapterLabel(chapter)}</span>
         </div>
         <button
           type="button"
@@ -153,8 +191,8 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           series={series}
           chapter={chapter}
           next={next}
-          initialPage={page}
-          onPageChange={setPage}
+          initialIndex={index}
+          onIndexChange={setIndex}
           onTap={toggleControls}
           onScrollAway={hideControls}
         />
@@ -164,13 +202,9 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           series={series}
           chapter={chapter}
           next={next}
-          prev={prev}
-          page={page}
-          isEnd={isEnd}
-          goTo={(p) => {
-            hideControls();
-            goTo(p);
-          }}
+          index={index}
+          forward={forward}
+          back={back}
           onTapCenter={toggleControls}
         />
       )}
@@ -214,22 +248,35 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
 
 // ---------------------------------------------------------------------------
 
-function EndCard({ series, chapter, next, onBack }: { series: Series; chapter: Chapter; next?: Chapter; onBack?: () => void }) {
+interface EndCardProps {
+  series: Series;
+  chapter: Chapter;
+  next?: Chapter;
+  onBack?: () => void;
+}
+
+/** What follows the last page: the way into the next chapter, or a clear caught-up state. */
+function EndCard({ series, chapter, next, onBack }: EndCardProps) {
+  const finishedSeries = series.status === "completed";
   return (
     <div className="endcard">
       <p className="endcard__label">{formatChapterNumber(chapter.number)} complete</p>
       {next ? (
         <>
           <h2 className="endcard__title">Up next: {formatChapterNumber(next.number)}</h2>
-          <p className="muted">{next.title}</p>
+          {next.title.trim().toLowerCase() !== `chapter ${next.number}` && <p className="muted">{next.title}</p>}
           <Link href={`/read/${series.id}/${next.id}`} className="btn btn--primary btn--large">
             Continue to next chapter
           </Link>
         </>
       ) : (
         <>
-          <h2 className="endcard__title">You&apos;re all caught up</h2>
-          <p className="muted">That&apos;s the latest chapter of {series.title}.</p>
+          <h2 className="endcard__title">{finishedSeries ? "The end" : "You’re all caught up"}</h2>
+          <p className="muted">
+            {finishedSeries
+              ? `You’ve finished ${series.title}.`
+              : `That’s the latest chapter of ${series.title}. New chapters will show up on Home.`}
+          </p>
         </>
       )}
       {onBack && (
@@ -244,51 +291,45 @@ interface VerticalProps {
   series: Series;
   chapter: Chapter;
   next?: Chapter;
-  initialPage: number;
-  onPageChange: (page: number) => void;
+  initialIndex: number;
+  onIndexChange: (index: number) => void;
   onTap: () => void;
   onScrollAway: () => void;
 }
 
 /** Continuous vertical scroll (manhwa/webtoon style). */
-function VerticalPages({ series, chapter, next, initialPage, onPageChange, onTap, onScrollAway }: VerticalProps) {
+function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onTap, onScrollAway }: VerticalProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
-  const initial = useRef(initialPage);
-  const lastPage = chapter.pageCount - 1;
+  const frame = useRef(0);
+  const initial = useRef(initialIndex);
 
-  // Restore position, then start observing which page crosses the middle of the screen.
+  // Restore the saved position before first paint.
   useLayoutEffect(() => {
     const root = scroller.current;
     if (!root) return;
-    document.getElementById(`reader-page-${initial.current}`)?.scrollIntoView({ block: "start" });
+    const target = isEndIndex(initial.current, chapter.pageCount) ? "reader-end" : `reader-page-${initial.current}`;
+    document.getElementById(target)?.scrollIntoView({ block: "start" });
     lastScrollTop.current = root.scrollTop;
-    if (typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            onPageChange(Number((entry.target as HTMLElement).dataset.page));
-          }
-        }
-      },
-      { root: null, rootMargin: "-50% 0px -50% 0px", threshold: 0 },
+  }, [chapter.pageCount]);
+
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  const measure = () => {
+    const root = scroller.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    const pageTops = Array.from(root.querySelectorAll<HTMLElement>("[data-page]"), (el) => el.getBoundingClientRect().top);
+    const endEl = root.querySelector<HTMLElement>("#reader-end");
+    onIndexChange(
+      pickVerticalIndex({
+        pageTops,
+        endTop: endEl ? endEl.getBoundingClientRect().top : Number.POSITIVE_INFINITY,
+        viewportTop: rect.top,
+        viewportHeight: rect.height,
+      }),
     );
-    root.querySelectorAll<HTMLElement>("[data-page]").forEach((el) => observer.observe(el));
-
-    // Fast flings and jumps can skip the last page's midline crossing, so also
-    // count the end card coming into view as having reached the last page.
-    const endObserver = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onPageChange(lastPage);
-    });
-    const end = root.querySelector("[data-end]");
-    if (end) endObserver.observe(end);
-
-    return () => {
-      observer.disconnect();
-      endObserver.disconnect();
-    };
-  }, [onPageChange, lastPage]);
+  };
 
   return (
     <div
@@ -304,6 +345,8 @@ function VerticalPages({ series, chapter, next, initialPage, onPageChange, onTap
           lastScrollTop.current = top;
           onScrollAway();
         }
+        cancelAnimationFrame(frame.current);
+        frame.current = requestAnimationFrame(measure);
       }}
     >
       {Array.from({ length: chapter.pageCount }, (_, i) => (
@@ -318,7 +361,7 @@ function VerticalPages({ series, chapter, next, initialPage, onPageChange, onTap
           />
         </div>
       ))}
-      <div data-end>
+      <div id="reader-end">
         <EndCard series={series} chapter={chapter} next={next} />
       </div>
     </div>
@@ -329,18 +372,20 @@ interface PagedProps {
   series: Series;
   chapter: Chapter;
   next?: Chapter;
-  prev?: Chapter;
-  page: number;
-  isEnd: boolean;
-  goTo: (page: number) => void;
+  index: number;
+  forward: () => void;
+  back: () => void;
   onTapCenter: () => void;
 }
 
-/** One page at a time, right-to-left (manga). Left tap/swipe-right = forward. */
-function PagedPages({ series, chapter, next, page, isEnd, goTo, onTapCenter }: PagedProps) {
+/**
+ * One page at a time, right-to-left (manga). Left tap / swipe right = forward,
+ * right tap / swipe left = back. After the last page comes the end card;
+ * going forward once more continues to the next chapter.
+ */
+function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }: PagedProps) {
   const touch = useRef<{ x: number; y: number } | null>(null);
-  const forward = () => goTo(page + 1);
-  const back = () => goTo(page - 1);
+  const isEnd = isEndIndex(index, chapter.pageCount);
 
   return (
     <div
@@ -371,20 +416,22 @@ function PagedPages({ series, chapter, next, page, isEnd, goTo, onTapCenter }: P
           seriesId={series.id}
           hue={series.hue}
           chapterNumber={chapter.number}
-          page={page}
+          page={index}
           pageCount={chapter.pageCount}
         />
       )}
 
-      {/* Tap zones: left = next page (RTL), right = previous page, centre = controls.
-          Omitted on the end card so its buttons stay reachable. */}
-      {!isEnd && (
-        <>
-          <button type="button" className="zone zone--left" aria-label="Next page" onClick={forward} />
-          <button type="button" className="zone zone--center" aria-label="Show or hide controls" onClick={onTapCenter} />
-          <button type="button" className="zone zone--right" aria-label="Previous page" onClick={back} disabled={page === 0} />
-        </>
-      )}
+      {/* Tap zones: left = forward (RTL), right = back, centre = controls. On the end
+          card the card's own buttons sit above the zones, so both stay usable. */}
+      <button
+        type="button"
+        className="zone zone--left"
+        aria-label={isEnd ? "Next chapter" : "Next page"}
+        onClick={forward}
+        disabled={isEnd && !next}
+      />
+      <button type="button" className="zone zone--center" aria-label="Show or hide controls" onClick={onTapCenter} />
+      <button type="button" className="zone zone--right" aria-label="Previous page" onClick={back} disabled={index === 0} />
     </div>
   );
 }

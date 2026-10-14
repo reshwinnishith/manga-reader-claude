@@ -1,4 +1,5 @@
 import type { UserData } from "@/domain/types";
+import { migrateUserData } from "@/lib/user-data";
 
 /**
  * Persistence boundary for user data. The app talks only to this interface, so
@@ -14,17 +15,6 @@ export interface PersistenceAdapter {
 
 export const STORAGE_KEY = "manga-reader:v1";
 
-function isUserData(value: unknown): value is UserData {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Partial<UserData>;
-  return (
-    v.version === 1 &&
-    !!v.library && typeof v.library === "object" &&
-    !!v.progress && typeof v.progress === "object" &&
-    !!v.readerModes && typeof v.readerModes === "object"
-  );
-}
-
 export function createLocalStorageAdapter(key = STORAGE_KEY): PersistenceAdapter {
   return {
     load() {
@@ -32,7 +22,16 @@ export function createLocalStorageAdapter(key = STORAGE_KEY): PersistenceAdapter
         const raw = window.localStorage.getItem(key);
         if (!raw) return null;
         const parsed: unknown = JSON.parse(raw);
-        return isUserData(parsed) ? parsed : null;
+        const migrated = migrateUserData(parsed);
+        if (!migrated) return null; // unrecognised data: start fresh
+        const from = (parsed as { version?: unknown }).version;
+        if (from !== migrated.version) {
+          // Keep the pre-migration copy once, then persist the upgraded shape.
+          const backupKey = `${key}:backup-v${String(from)}`;
+          if (window.localStorage.getItem(backupKey) === null) window.localStorage.setItem(backupKey, raw);
+          window.localStorage.setItem(key, JSON.stringify(migrated));
+        }
+        return migrated;
       } catch {
         return null; // corrupt or unavailable storage: start fresh
       }

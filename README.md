@@ -2,7 +2,7 @@
 
 A personal manga/manhwa reading PWA. **Open → Find → Read → Resume.**
 
-This is **Checkpoint 1**: a complete, fully local prototype. There is no Firebase, no authentication, no
+This is **Checkpoint 1.5** (Checkpoint 1 plus reading-progress reliability, chapter continuation, On Hold / Dropped statuses and iPhone polish): a complete, fully local prototype. There is no Firebase, no authentication, no
 network calls to manga sources, and no deployment. All content is mock data with generated placeholder
 artwork (no copyrighted images). Reading progress and your library live in the browser's `localStorage`.
 
@@ -11,7 +11,7 @@ artwork (no copyrighted images). Reading progress and your library live in the b
 | Screen | What it does |
 | --- | --- |
 | **Home** | Continue Reading hero (resumes at the exact chapter and page), more in progress, New Chapters, Recently Added |
-| **Library** | Cover grid, search, status filters (All / Reading / Planned / Completed), empty states |
+| **Library** | Cover grid, search, status filters (All / Reading / Planned / On Hold / Dropped / Completed), empty states |
 | **Discover** | Search + Manga/Manhwa filter over a mock catalog, one-tap add/remove from library |
 | **Series** | Cover, metadata, description, progress, Start/Continue button, chapter list with read/in-progress state, reading status |
 | **Reader** | Full-screen, tap to show/hide controls, page slider, previous/next chapter. **Vertical scroll** (manhwa default) and **paged right-to-left** (manga default). Mode is remembered per series. Progress is saved on every page change and the next chapter is one tap away |
@@ -21,6 +21,28 @@ Reader controls:
 - **Paged (RTL):** tap the left third = next page, right third = previous page, centre = controls. Swipe right = next page. Keyboard: ← next, → previous, Space next, Shift+Space previous.
 - **Vertical:** scroll; tap anywhere to toggle controls (they auto-hide while scrolling).
 - `Esc` toggles controls in both modes.
+
+### Reading progress semantics
+
+The reader tracks one position per chapter, `index`: `0 … pageCount-1` are pages and `pageCount` means **the end of the chapter**. Both modes read and write this same value, so mode switches, going backwards and reopening cannot disagree.
+
+| Term | Meaning |
+| --- | --- |
+| `page` | Last page viewed (never past the final page) |
+| `atEnd` | The *current* position is the end of the chapter. Paged: the end card is showing. Vertical: the final page's bottom edge has scrolled past the middle of the screen |
+| `completed` | The end was reached at least once. **Sticky**: rereading, scrolling back or switching modes never clears it |
+
+- Being on the **final page does not complete** a chapter; reaching the end does. The slider cannot reach the end.
+- Stepping back off the end clears `atEnd` only. Recording an unchanged position is a no-op, so repeated events cannot duplicate completions.
+- **Resume / Continue:** nothing read → chapter 1; otherwise the last-read chapter at its saved page; if it was left `atEnd`, the next chapter (at its saved page if partly read, else the top); at the end of the latest chapter → "caught up".
+- **Opening a chapter:** where you left off, or the top if it was unread or left at its end.
+- **Chapter continuation:** the end card offers "Continue to next chapter". In paged mode one more forward tap/swipe/key on the end card also continues, ignored for 450 ms after arriving so a double tap cannot skip a chapter. Footer previous/next-chapter controls always work.
+- **Caught up:** on the latest chapter the end card says so (or "The end" for a finished series) and offers Back to series; the series page shows "Caught up · Read again".
+- **Library status side effects:** reading moves Planned / On Hold / Dropped series back to Reading; finishing every chapter of a publication-complete series sets Completed; rereading a Completed series leaves it Completed. On Hold and Dropped series are kept off Home (Continue Reading, New Chapters, Recently Added) but stay in the Library.
+
+### Stored data & migration
+
+User data is versioned (`UserData.version`, currently 2). `migrateUserData` upgrades older data on load, keeps everything (library, progress, modes, completion history), derives `atEnd` for v1 chapters, and falls back to "reading" for unknown statuses. The v1 original is copied once to `manga-reader:v1:backup-v1` before the upgraded copy is written. Add a step there when the shape changes again.
 
 ## Getting started
 
@@ -110,11 +132,16 @@ Key decisions:
 
 `npm test` runs Vitest with Testing Library (jsdom):
 
-- `lib/user-data.test.ts`, `lib/selectors.test.ts`: library operations, progress recording, chapter completion, resume rules, new chapters, filters, search
-- `state/user-data-store.test.ts`: localStorage persistence across "reloads", corrupt data recovery, no reseeding, multi-tab updates
+- `lib/user-data.test.ts`, `lib/selectors.test.ts`, `lib/reader-position.test.ts`: library statuses, completion boundaries, idempotence, rereading, resume rules, v1→v2 migration, Home filtering, search
+- `state/user-data-store.test.ts`: localStorage persistence across "reloads", v1 migration + backup, corrupt data recovery, no reseeding, multi-tab updates, no-op writes
 - `components/app-nav.test.tsx`: navigation links and active state
 - `components/screens.test.tsx`: Home, Library, Discover (add to library) and Series (Start/Continue) behaviour and empty states
-- `components/reader-view.test.tsx`: paged taps/keyboard, controls toggle, page progress saved, chapter completion and next-chapter link, per-series reading mode, vertical mode, error state
+- `components/reader-view.test.tsx`: paged taps/swipes/keyboard, end-of-chapter completion in both modes (with a fake-layout vertical scroll), chapter transitions and the skip guard, caught-up states, rereading, mode switching, per-series mode, error state
+
+### What is and is not verified on an iPhone
+
+- **Automated (run in this repo):** the Vitest suite above, plus a Chromium script with iPhone viewport/UA/touch emulation that checked real touch gestures (tap zones, RTL swipes, vertical drag scrolling), tap targets ≥ 44 px on every screen, safe-area handling (by overriding the `--safe-*` CSS variables to notch-sized values), navigation, v1→v2 migration in a real browser and reload restoration.
+- **Not covered:** actual iPhone Safari / WebKit. No WebKit engine was available, so Safari-specific behaviour (dynamic toolbar resizing, real `env(safe-area-inset-*)`, momentum scrolling, the edge-swipe back gesture, home-screen install) still needs a manual pass on a device using the steps above.
 
 ## PWA
 
@@ -128,3 +155,5 @@ Key decisions:
 - Paged mode is single-page; no two-page spread for landscape/desktop yet.
 - No page-turn animation or pinch-zoom in the reader.
 - Demo data is seeded on first launch; clear site data to reset.
+- Completion in vertical mode is a scroll-position heuristic (final page's bottom edge past mid-screen); with very different page heights it may need tuning once real images exist.
+- Safari's left-edge swipe-back can fire if a paged swipe starts within ~20 px of the screen edge; tap zones avoid this. It does not apply to the installed home-screen app.

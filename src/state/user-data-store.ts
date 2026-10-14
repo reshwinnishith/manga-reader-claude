@@ -12,7 +12,7 @@ export interface UserDataStore {
   removeFromLibrary(seriesId: string): void;
   setReadingStatus(seriesId: string, status: ReadingStatus): void;
   setReaderMode(seriesId: string, mode: ReaderMode): void;
-  recordProgress(series: Series, chapterId: string, page: number): void;
+  recordProgress(series: Series, chapterId: string, page: number, atEnd?: boolean): void;
 }
 
 interface StoreOptions {
@@ -83,8 +83,8 @@ export function createUserDataStore({
     removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
     setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),
     setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode)),
-    recordProgress: (series, chapterId, page) =>
-      update((d) => ops.recordProgress(d, series, chapterId, page, now())),
+    recordProgress: (series, chapterId, page, atEnd = false) =>
+      update((d) => ops.recordProgress(d, series, chapterId, page, now(), atEnd)),
   };
 }
 

@@ -6,7 +6,19 @@
 export type SeriesType = "manga" | "manhwa";
 export type PublicationStatus = "ongoing" | "completed" | "hiatus";
 export type ReaderMode = "vertical" | "paged-rtl";
-export type ReadingStatus = "reading" | "planned" | "completed";
+export type ReadingStatus = "reading" | "planned" | "on-hold" | "dropped" | "completed";
+
+/** Display order and labels for reading statuses (filters, status picker). */
+export const READING_STATUSES: { value: ReadingStatus; label: string }[] = [
+  { value: "reading", label: "Reading" },
+  { value: "planned", label: "Planned" },
+  { value: "on-hold", label: "On Hold" },
+  { value: "dropped", label: "Dropped" },
+  { value: "completed", label: "Completed" },
+];
+
+/** Statuses the user has paused or abandoned: no nudges on Home. */
+export const INACTIVE_STATUSES: readonly ReadingStatus[] = ["on-hold", "dropped"];
 
 export interface Chapter {
   id: string;
@@ -45,10 +57,20 @@ export interface LibraryEntry {
   addedAt: string;
 }
 
+/**
+ * Per-chapter reading state.
+ *
+ * - `page`: 0-based page the reader was last on (never past the final page).
+ * - `atEnd`: the reader's *current* position is the end of the chapter (paged:
+ *   the end card is showing; vertical: the final page has scrolled past the
+ *   middle of the screen). Moving back off the end clears it.
+ * - `completed`: the end of the chapter has been reached at least once. This
+ *   is sticky: rereading, scrolling back or switching modes never clears it.
+ */
 export interface ChapterProgress {
-  /** 0-based index of the page the reader was last on. */
   page: number;
   pageCount: number;
+  atEnd: boolean;
   completed: boolean;
   updatedAt: string;
 }
@@ -59,8 +81,11 @@ export interface SeriesProgress {
   chapters: Record<string, ChapterProgress>;
 }
 
+/** Bump when the persisted shape changes and add a step to `migrateUserData`. */
+export const USER_DATA_VERSION = 2;
+
 export interface UserData {
-  version: 1;
+  version: typeof USER_DATA_VERSION;
   library: Record<string, LibraryEntry>;
   progress: Record<string, SeriesProgress>;
   readerModes: Record<string, ReaderMode>;

@@ -1,21 +1,23 @@
 import { MOCK_NOW, NEW_CHAPTER_WINDOW_DAYS } from "@/data/mock-catalog";
 import type { Chapter, ReadingStatus, Series, SeriesProgress, UserData } from "@/domain/types";
-import { isLastPage } from "./user-data";
+import { isInactiveStatus } from "./user-data";
 
 export interface ResumeTarget {
   chapter: Chapter;
   /** 0-based page to open on. */
   page: number;
-  /** "start" = nothing read yet, "continue" = mid-way, "reread" = everything finished */
+  /** "start" = nothing read yet, "continue" = mid-way, "reread" = caught up / finished */
   kind: "start" | "continue" | "reread";
 }
 
 /**
  * Where "Start / Continue reading" should take the user.
  * - Nothing read -> chapter 1, page 1.
- * - Mid-chapter -> same chapter, same page.
- * - Last page of a chapter reached -> next chapter from the top.
- * - Whole series finished -> last chapter's first page ("reread").
+ * - Mid-chapter -> same chapter, same page (including the final page: just
+ *   being on the last page does NOT finish a chapter).
+ * - Reader is at the end of a chapter (`atEnd`) -> start of the next chapter,
+ *   or its saved page if it was already partly read.
+ * - At the end of the final chapter -> "reread" (caught up).
  */
 export function getResumeTarget(series: Series, progress?: SeriesProgress): ResumeTarget | null {
   const first = series.chapters[0];
@@ -29,24 +31,22 @@ export function getResumeTarget(series: Series, progress?: SeriesProgress): Resu
   const cp = progress.chapters[chapter.id];
   if (!cp) return { chapter, page: 0, kind: "continue" };
 
-  if (isLastPage(cp.page, chapter.pageCount)) {
+  if (cp.atEnd) {
     const next = series.chapters[idx + 1];
-    if (next) {
-      // Prefer partial progress in the next chapter if there is some.
-      const np = progress.chapters[next.id];
-      const resumePage = np && !isLastPage(np.page, next.pageCount) ? np.page : 0;
-      return { chapter: next, page: resumePage, kind: "continue" };
-    }
+    if (next) return { chapter: next, page: getChapterStartPage(next, progress), kind: "continue" };
     return { chapter, page: 0, kind: "reread" };
   }
-  return { chapter, page: cp.page, kind: "continue" };
+  return { chapter, page: Math.min(cp.page, chapter.pageCount - 1), kind: "continue" };
 }
 
-/** Page a reader should open on for an explicit chapter. */
+/**
+ * Page a reader should open on for an explicit chapter: where you left off,
+ * or the top for unread chapters and chapters you left at their end.
+ */
 export function getChapterStartPage(chapter: Chapter, progress?: SeriesProgress): number {
   const cp = progress?.chapters[chapter.id];
-  if (!cp || isLastPage(cp.page, chapter.pageCount)) return 0;
-  return Math.min(cp.page, chapter.pageCount - 1);
+  if (!cp || cp.atEnd) return 0;
+  return Math.max(0, Math.min(cp.page, chapter.pageCount - 1));
 }
 
 /** 0..1 across the whole series (completed chapters + fraction of current). */
@@ -84,6 +84,8 @@ export function getContinueReading(catalog: Series[], data: UserData): ContinueI
   for (const series of catalog) {
     const progress = data.progress[series.id];
     if (!progress) continue;
+    const status = data.library[series.id]?.status;
+    if (status && isInactiveStatus(status)) continue; // paused / dropped series stay out of the way
     const target = getResumeTarget(series, progress);
     if (!target) continue;
     // Hide fully finished series; they live in the library.
@@ -116,7 +118,8 @@ export function getNewChapters(
 ): NewChapterItem[] {
   const items: NewChapterItem[] = [];
   for (const series of catalog) {
-    if (!data.library[series.id]) continue;
+    const entry = data.library[series.id];
+    if (!entry || isInactiveStatus(entry.status)) continue;
     const progress = data.progress[series.id];
     const fresh = series.chapters.filter((c) => {
       const age = daysBetween(c.releasedAt, now);
@@ -128,10 +131,10 @@ export function getNewChapters(
   return items.sort((a, b) => b.latest.releasedAt.localeCompare(a.latest.releasedAt));
 }
 
-/** Library series, most recently added first. */
+/** Library series, most recently added first (paused and dropped series stay out of the way). */
 export function getRecentlyAdded(catalog: Series[], data: UserData): Series[] {
   return catalog
-    .filter((s) => data.library[s.id])
+    .filter((s) => data.library[s.id] && !isInactiveStatus(data.library[s.id]!.status))
     .sort((a, b) => data.library[b.id]!.addedAt.localeCompare(data.library[a.id]!.addedAt));
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { ReadingStatus } from "@/domain/types";
+import { READING_STATUSES, type ReadingStatus } from "@/domain/types";
 import { formatChapterNumber } from "@/lib/format";
 import { filterLibrary, getResumeTarget, getSeriesProgressFraction, type LibraryFilter } from "@/lib/selectors";
 import { useCatalog } from "@/state/catalog-context";
@@ -9,12 +9,11 @@ import { useUserData } from "@/state/use-user-data";
 import { DiscoverIcon } from "./icons";
 import { EmptyState, GridSkeleton, PageHeader, SeriesCard } from "./ui";
 
-const FILTERS: { value: LibraryFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "reading", label: "Reading" },
-  { value: "planned", label: "Planned" },
-  { value: "completed", label: "Completed" },
-];
+const FILTERS: { value: LibraryFilter; label: string }[] = [{ value: "all", label: "All" }, ...READING_STATUSES];
+
+const emptyCounts = (): Record<LibraryFilter, number> => ({
+  all: 0, reading: 0, planned: 0, "on-hold": 0, dropped: 0, completed: 0,
+});
 
 export function LibraryView() {
   const { series: catalog } = useCatalog();
@@ -23,7 +22,7 @@ export function LibraryView() {
   const [query, setQuery] = useState("");
 
   const counts = useMemo(() => {
-    const c: Record<LibraryFilter, number> = { all: 0, reading: 0, planned: 0, completed: 0 };
+    const c = emptyCounts();
     if (!data) return c;
     for (const entry of Object.values(data.library)) {
       c.all += 1;
@@ -81,7 +80,7 @@ export function LibraryView() {
       ) : items.length === 0 ? (
         <EmptyState
           title="No matches"
-          body={query ? `Nothing in your library matches “${query.trim()}”.` : `No series marked ${filter}.`}
+          body={query ? `Nothing in your library matches “${query.trim()}”.` : `No series marked ${FILTERS.find((f) => f.value === filter)?.label ?? filter}.`}
         />
       ) : (
         <ul className="grid" aria-label="Library">

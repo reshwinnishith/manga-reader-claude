@@ -14,9 +14,9 @@ function chapterProgress(seriesId: string, doneUpTo: number, current?: { n: numb
   const chapters: Record<string, ChapterProgress> = {};
   series.chapters.forEach((c) => {
     if (c.number <= doneUpTo) {
-      chapters[c.id] = { page: c.pageCount - 1, pageCount: c.pageCount, completed: true, updatedAt: at(when + 1) };
+      chapters[c.id] = { page: c.pageCount - 1, pageCount: c.pageCount, atEnd: true, completed: true, updatedAt: at(when + 1) };
     } else if (current && c.number === current.n) {
-      chapters[c.id] = { page: current.page, pageCount: c.pageCount, completed: false, updatedAt: at(when) };
+      chapters[c.id] = { page: current.page, pageCount: c.pageCount, atEnd: false, completed: false, updatedAt: at(when) };
     }
   });
   const last = current ? current.n : doneUpTo;
@@ -39,12 +39,16 @@ export function createDemoUserData(): UserData {
       "moonlit-pharmacy": { seriesId: "moonlit-pharmacy", status: "planned", addedAt: at(60) },
       "rooftop-rivals": { seriesId: "rooftop-rivals", status: "completed", addedAt: at(900) },
       "ash-and-ember-academy": { seriesId: "ash-and-ember-academy", status: "planned", addedAt: at(20) },
+      "midnight-delivery": { seriesId: "midnight-delivery", status: "on-hold", addedAt: at(700) },
+      "neon-ronin": { seriesId: "neon-ronin", status: "dropped", addedAt: at(650) },
     },
     progress: {
       "tower-of-quiet-clocks": chapterProgress("tower-of-quiet-clocks", 10, { n: 11, page: 4 }, 2),
       "skyward-lanterns": chapterProgress("skyward-lanterns", 8, { n: 9, page: 6 }, 30),
       "last-cartographer": chapterProgress("last-cartographer", 7, undefined, 100),
       "rooftop-rivals": chapterProgress("rooftop-rivals", 10, undefined, 800),
+      "midnight-delivery": chapterProgress("midnight-delivery", 3, { n: 4, page: 2 }, 400),
+      "neon-ronin": chapterProgress("neon-ronin", 1, { n: 2, page: 5 }, 600),
     },
     readerModes: {},
   };

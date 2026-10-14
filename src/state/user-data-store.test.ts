@@ -67,4 +67,57 @@ describe("user data store", () => {
     expect(listener).toHaveBeenCalled();
     expect(store.getSnapshot()?.library["x"]).toBeDefined();
   });
+
+  it("migrates stored v1 data on load, preserves it, and keeps a one-time backup", () => {
+    const v1 = {
+      version: 1,
+      seeded: true,
+      library: { "neon-ronin": { seriesId: "neon-ronin", status: "reading", addedAt: "2026-01-01T00:00:00.000Z" } },
+      progress: {
+        "neon-ronin": {
+          lastChapterId: "neon-ronin-c1",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          chapters: { "neon-ronin-c1": { page: 15, pageCount: 16, completed: true, updatedAt: "2026-01-02T00:00:00.000Z" } },
+        },
+      },
+      readerModes: { "neon-ronin": "vertical" },
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v1));
+
+    const store = createUserDataStore(opts());
+    const data = store.getSnapshot()!;
+    expect(data.version).toBe(2);
+    expect(data.library["neon-ronin"]?.status).toBe("reading");
+    expect(data.readerModes["neon-ronin"]).toBe("vertical");
+    expect(data.progress["neon-ronin"]?.chapters["neon-ronin-c1"]).toMatchObject({ completed: true, atEnd: true });
+
+    // Upgraded copy is persisted, original is backed up exactly once.
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).version).toBe(2);
+    expect(JSON.parse(window.localStorage.getItem(`${STORAGE_KEY}:backup-v1`)!)).toEqual(v1);
+    createUserDataStore(opts()).getSnapshot(); // loading again must not overwrite the backup
+    expect(JSON.parse(window.localStorage.getItem(`${STORAGE_KEY}:backup-v1`)!)).toEqual(v1);
+  });
+
+  it("does not notify or write when the same reading position is recorded again", () => {
+    const store = createUserDataStore(opts());
+    store.getSnapshot();
+    store.recordProgress(series, series.chapters[0]!.id, 3);
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.recordProgress(series, series.chapters[0]!.id, 3);
+    store.recordProgress(series, series.chapters[0]!.id, 3, false);
+    expect(listener).not.toHaveBeenCalled();
+    store.recordProgress(series, series.chapters[0]!.id, 4);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("round-trips the on-hold and dropped statuses through storage", () => {
+    const a = createUserDataStore(opts());
+    a.getSnapshot();
+    a.addToLibrary("neon-ronin");
+    a.setReadingStatus("neon-ronin", "on-hold");
+    expect(createUserDataStore(opts()).getSnapshot()?.library["neon-ronin"]?.status).toBe("on-hold");
+    a.setReadingStatus("neon-ronin", "dropped");
+    expect(createUserDataStore(opts()).getSnapshot()?.library["neon-ronin"]?.status).toBe("dropped");
+  });
 });

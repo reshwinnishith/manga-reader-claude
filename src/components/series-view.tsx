@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import type { ReadingStatus, Series } from "@/domain/types";
+import { READING_STATUSES, type Series } from "@/domain/types";
 import { formatChapterNumber, formatDate, pluralize } from "@/lib/format";
 import { getChapterState, getResumeTarget, getSeriesProgressFraction } from "@/lib/selectors";
 import { useUserData } from "@/state/use-user-data";
@@ -10,12 +10,6 @@ import { AddToLibraryButton } from "./add-button";
 import { Cover } from "./cover";
 import { BackIcon, CheckIcon, PlayIcon, SortIcon } from "./icons";
 import { ProgressBar, SectionHeader, TypeBadge } from "./ui";
-
-const STATUSES: { value: ReadingStatus; label: string }[] = [
-  { value: "reading", label: "Reading" },
-  { value: "planned", label: "Planned" },
-  { value: "completed", label: "Completed" },
-];
 
 const PUBLICATION_LABEL = { ongoing: "Ongoing", completed: "Completed", hiatus: "On hiatus" } as const;
 
@@ -36,7 +30,7 @@ export function SeriesView({ series }: { series: Series }) {
   const ctaLabel =
     !data || !target ? "Start reading"
     : target.kind === "start" ? "Start reading"
-    : target.kind === "reread" ? "Read again"
+    : target.kind === "reread" ? (series.status === "completed" ? "Read again" : "Caught up · Read again")
     : `Continue · ${formatChapterNumber(target.chapter.number)}`;
 
   return (
@@ -89,7 +83,7 @@ export function SeriesView({ series }: { series: Series }) {
 
       {entry && (
         <div className="chips" role="group" aria-label="Reading status">
-          {STATUSES.map((s) => (
+          {READING_STATUSES.map((s) => (
             <button
               key={s.value}
               type="button"
