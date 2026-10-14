@@ -26,5 +26,5 @@ export function ExternalSeriesView({ id }: { id: string }) {
       />
     );
   }
-  return <><SeriesView series={series} /><MangaDexChapters title={series.title} anilistId={saved.externalId} /></>;
+  return <><SeriesView series={series} /><MangaDexChapters title={series.title} anilistId={saved?.externalId ?? 0} /></>;
 }
