@@ -90,7 +90,7 @@ export function LibraryView() {
             const pct = Math.round(getSeriesProgressFraction(s, progress) * 100);
             const caption = progress && target
               ? `${formatChapterNumber(target.chapter.number)} · ${pct}%`
-              : `${s.chapters.length} chapters`;
+              : s.id.startsWith("al-") ? "Not started" : `${s.chapters.length} chapters`;
             return (
               <li key={s.id}>
                 <SeriesCard series={s} caption={caption} />
