@@ -39,12 +39,21 @@ export const mangaDexProvider: ReadingSourceProvider = {
 /** Publisher links are curated by catalogue ID, never generated from a title slug.
  * VIZ explicitly credits ONE and Yusuke Murata on this destination.
  */
-export function officialDestinations(title: Pick<SavedTitle, "externalId">): OfficialDestination[] {
-  return title.externalId === 74347 ? [{
+export function officialDestinations(title: Pick<SavedTitle, "externalId"> & Partial<Pick<SavedTitle, "title" | "type">>): OfficialDestination[] {
+  if (title.externalId === 74347) return [{
     label: "Read One-Punch Man on VIZ / Shonen Jump",
     url: "https://www.viz.com/shonenjump/chapters/one-punch-man",
     note: "Official ONE / Yusuke Murata edition. Availability varies by region; some chapters require a subscription.",
-  }] : [];
+  }];
+
+  // Curated publisher match for the specific English manhwa edition. Do not
+  // match the similarly named prose novel or infer arbitrary publisher URLs.
+  if (title.type === "manhwa" && title.title?.trim().toLocaleLowerCase("en") === "the legendary hero is an academy honors student") return [{
+    label: "Read The Legendary Hero is an Academy Honors Student on Tapas",
+    url: "https://tapas.io/series/the-legendary-hero-is-an-academy-honors-student/info",
+    note: "Official English webtoon. Some episodes are free or Wait Until Free; others require unlocking on Tapas. Opens the publisher's reader.",
+  }];
+  return [];
 }
 
 export const readingProviders: readonly ReadingSourceProvider[] = [mangaDexProvider];
