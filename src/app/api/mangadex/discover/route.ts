@@ -8,7 +8,10 @@ export async function GET(request: NextRequest) {
   const url = new URL("https://api.mangadex.org/manga");
   if (title && title.length >= 2 && title.length <= 150) {
     url.searchParams.set("title", title);
-    url.searchParams.set("limit", "10");
+    url.searchParams.set("limit", "100");
+    url.searchParams.append("includes[]", "cover_art");
+    url.searchParams.append("includes[]", "author");
+    url.searchParams.append("includes[]", "artist");
     url.searchParams.set("contentRating[]", "safe");
   } else if (id && MANGADEX_ID.test(id)) {
     url.pathname = `/manga/${id}/feed`;
