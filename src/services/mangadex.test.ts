@@ -33,7 +33,7 @@ describe("source discovery", () => {
   });
   it("passes alternate titles to the server and rejects conflicting verified editions", async () => {
     const title = normalizeMedia({ id: 74347, title: { english: "One-Punch Man", romaji: "One Punch-Man" } }, "now")!;
-    const fetcher = vi.fn(async () => json({ status: "conflict", providerId: "mangadex", releases: [] }));
+    const fetcher = vi.fn(async (_url: string) => json({ status: "conflict", providerId: "mangadex", releases: [] }));
     vi.stubGlobal("fetch", fetcher);
     await expect(mangaDexProvider.resolve(title)).rejects.toThrow("Multiple or conflicting editions");
     const url = String(fetcher.mock.calls[0]![0]);
