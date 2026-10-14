@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { migrateUserData } from "@/lib/user-data";
 import { READING_STATUSES, type ReadingStatus } from "@/domain/types";
 import { formatChapterNumber } from "@/lib/format";
 import { filterLibrary, getResumeTarget, getSeriesProgressFraction, type LibraryFilter } from "@/lib/selectors";
@@ -17,7 +18,9 @@ const emptyCounts = (): Record<LibraryFilter, number> => ({
 
 export function LibraryView() {
   const catalog = useAllSeries();
-  const { data } = useUserData();
+  const { data, actions } = useUserData();
+  const importRef = useRef<HTMLInputElement>(null);
+  const [backupMessage, setBackupMessage] = useState("");
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [query, setQuery] = useState("");
 
@@ -39,6 +42,30 @@ export function LibraryView() {
   return (
     <>
       <PageHeader title="Library" subtitle={data ? `${counts.all} series` : undefined} />
+      <div className="dcard__actions" style={{ marginBottom: 16 }}>
+        <button className="btn btn--secondary btn--compact" type="button" disabled={!data} onClick={() => {
+          if (!data) return;
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "mangareader-library-backup.json"; a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}>Export backup</button>
+        <button className="btn btn--secondary btn--compact" type="button" onClick={() => importRef.current?.click()}>Import backup</button>
+        <input ref={importRef} type="file" accept=".json,application/json" style={{ display: "none" }} aria-label="Import library backup" onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          try {
+            const parsed = migrateUserData(JSON.parse(await file.text()));
+            if (!parsed) throw new Error("Invalid backup");
+            if (!window.confirm("Replace your current library and reading progress with this backup?")) return;
+            actions.replaceData(parsed);
+            setBackupMessage("Backup restored.");
+          } catch { setBackupMessage("Couldn't read this backup file."); }
+          e.target.value = "";
+        }} />
+      </div>
+      {backupMessage && <p role="status" className="muted">{backupMessage}</p>
 
       <div className="search">
         <DiscoverIcon width={20} height={20} />
