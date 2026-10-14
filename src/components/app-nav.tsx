@@ -25,7 +25,7 @@ export function AppNav() {
   const pathname = usePathname();
   return (
     <nav className="nav" aria-label="Main">
-      <div className="nav__brand" aria-hidden="true">Manga<span>Reader</span></div>
+      <div className="nav__brand" aria-hidden="true">Manga<span>Reader</span><div style={{ marginTop: 5, fontSize: 12, fontWeight: 500, letterSpacing: 0, color: "#9995a7" }}>v1.01</div></div>
       <ul className="nav__list">
         {NAV_ITEMS.map(({ href, label, Icon }) => {
           const active = isActive(href, pathname);
