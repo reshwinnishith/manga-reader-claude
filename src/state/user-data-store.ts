@@ -1,4 +1,4 @@
-import { createDemoUserData } from "@/data/demo-user-data";
+import { emptyUserData } from "@/lib/user-data";
 import type { ReaderMode, ReadingStatus, SavedTitle, Series, UserData } from "@/domain/types";
 import { createLocalStorageAdapter, type PersistenceAdapter } from "@/services/persistence";
 import * as ops from "@/lib/user-data";
@@ -12,6 +12,7 @@ export interface UserDataStore {
   /** Save a search result (metadata snapshot) and add it to the library. */
   saveExternalTitle(title: SavedTitle): void;
   removeFromLibrary(seriesId: string): void;
+  replaceData(data: UserData): void;
   setReadingStatus(seriesId: string, status: ReadingStatus): void;
   setReaderMode(seriesId: string, mode: ReaderMode): void;
   recordProgress(series: Series, chapterId: string, page: number, atEnd?: boolean): void;
@@ -32,7 +33,7 @@ interface StoreOptions {
  */
 export function createUserDataStore({
   adapter,
-  initial = createDemoUserData,
+  initial = emptyUserData,
   now = () => new Date().toISOString(),
 }: StoreOptions): UserDataStore {
   let state: UserData | null = null;
@@ -84,6 +85,7 @@ export function createUserDataStore({
     addToLibrary: (id, status) => update((d) => ops.addToLibrary(d, id, now(), status)),
     saveExternalTitle: (title) => update((d) => ops.saveExternalTitle(d, title, now())),
     removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
+    replaceData: (data) => update(() => data),
     setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),
     setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode)),
     recordProgress: (series, chapterId, page, atEnd = false) =>
