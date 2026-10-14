@@ -117,8 +117,7 @@ export function SeriesView({ series }: { series: Series }) {
       {series.source && (
         <section className="section" aria-label="About this listing">
           <p className="notice">
-            This title came from AniList search, which provides title information only. Chapters and reading aren&apos;t
-            available yet.
+            Title details come from AniList. MangaDex chapters, when available, appear below. Check the edition before reading.
             {series.externalUrl && (
               <>
                 {" "}
