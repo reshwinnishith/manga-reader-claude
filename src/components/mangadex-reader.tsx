@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useUserData } from "@/state/use-user-data";
+import { seriesFromSaved } from "@/lib/series-from-saved";
 
-export function MangaDexReader({ id, group }: { id: string; group: string }) {
+export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }: { id: string; group: string; seriesId?: string; chapterNumber?: string }) {
+  const { data, actions } = useUserData();
   const [count, setCount] = useState(0);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"scroll" | "paged">("scroll");
@@ -18,16 +21,30 @@ export function MangaDexReader({ id, group }: { id: string; group: string }) {
         if (!response.ok) throw new Error(body.error || "Could not load chapter");
         if (typeof body.pageCount !== "number" || body.pageCount < 1) throw new Error("No pages available");
         setCount(body.pageCount);
+        if (seriesId && chapterNumber) {
+          try { const old = JSON.parse(localStorage.getItem(`mangareader:chapter:${seriesId}:${chapterNumber}`) || "null"); if (old?.chapterId === id && Number.isInteger(old?.page)) setPage(Math.max(0, Math.min(old.page, body.pageCount - 1))); } catch { /* ignore */ }
+        }
       })
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load chapter"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [id]);
 
+  useEffect(() => {
+    if (!seriesId || !chapterNumber || !count) return;
+    try { localStorage.setItem(`mangareader:chapter:${seriesId}:${chapterNumber}`, JSON.stringify({ chapterId: id, page, pageCount: count, updatedAt: new Date().toISOString() })); } catch { /* storage may be unavailable */ }
+    const saved = data?.savedTitles[seriesId];
+    if (saved) {
+      const base = seriesFromSaved(saved);
+      const series = { ...base, chapters: [{ id, number: Number(chapterNumber) || 0, title: `Chapter ${chapterNumber}`, pageCount: count, releasedAt: new Date().toISOString() }] };
+      actions.recordProgress(series, id, page);
+    }
+  }, [seriesId, chapterNumber, count, page, id, data?.savedTitles, actions]);
+
   return (
     <main style={{ minHeight: "100dvh", background: "#101015", color: "#fff", padding: "12px" }}>
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingBottom: 12 }}>
-        <Link href="/library" style={{ color: "inherit" }}>← Library</Link>
+        <Link href={seriesId ? `/series/${seriesId}` : "/library"} style={{ color: "inherit" }}>← Chapters</Link>
         <strong>Chapter reader</strong>
         <button type="button" onClick={() => setMode(mode === "scroll" ? "paged" : "scroll")}>{mode === "scroll" ? "Paged" : "Scroll"}</button>
       </header>
@@ -35,7 +52,7 @@ export function MangaDexReader({ id, group }: { id: string; group: string }) {
       {loading && <p role="status">Loading chapter…</p>}
       {error && <p role="alert">{error}</p>}
       {count > 0 && (mode === "scroll" ? (
-        <div style={{ maxWidth: 850, margin: "auto" }}>
+        <div style={{ maxWidth: 850, margin: "auto" }}><p style={{ textAlign: "center" }}>Scroll reading · For page-by-page progress, switch to Paged mode.</p>
           {Array.from({ length: count }, (_, index) => (
             // Images are proxied by our own server to respect MangaDex image host restrictions.
             // eslint-disable-next-line @next/next/no-img-element
