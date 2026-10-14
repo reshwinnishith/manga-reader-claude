@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { seriesFromSaved } from "@/lib/series-from-saved";
 import { useUserData } from "@/state/use-user-data";
 import { SeriesView } from "./series-view";
+import { MangaDexChapters } from "./mangadex-chapters";
 import { BlockSkeleton, EmptyState } from "./ui";
 
 /**
@@ -25,5 +26,5 @@ export function ExternalSeriesView({ id }: { id: string }) {
       />
     );
   }
-  return <SeriesView series={series} />;
+  return <><SeriesView series={series} /><MangaDexChapters title={series.title} anilistId={saved?.externalId ?? 0} /></>;
 }
