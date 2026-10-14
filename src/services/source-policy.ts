@@ -11,8 +11,10 @@
  * identity.
  *
  * Rights: MangaDex records an official English publication in `links.engtl`.
- * When one exists, unofficial English uploads are not shown for in-app
- * reading; the official destination is offered instead. Uploads without a
+ * When one exists, this app conservatively withholds English uploads not
+ * marked as official and offers the official destination instead. This is a
+ * product access rule, NOT evidence that each withheld upload is unlawful;
+ * catalogue links alone cannot establish individual upload permissions. Uploads without a
  * credited group are never readable: MangaDex's acceptable-use policy requires
  * crediting the group, and anonymous uploads include notices rather than
  * chapters. Official publisher groups (`official: true`) remain readable.
