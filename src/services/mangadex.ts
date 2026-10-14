@@ -40,7 +40,7 @@ const object = (value: unknown): RecordLike =>
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const str = (value: unknown): string => typeof value === "string" ? value : "";
 
-/** Find a MangaDex title by name; the user must confirm the match. */
+/** Find a MangaDex title by name; only matching AniList IDs are used automatically. */
 export async function searchMangaDex(title: string, anilistId: number, signal?: AbortSignal): Promise<MangaDexTitle[]> {
   const query = title.trim();
   if (query.length < 2) return [];
@@ -63,12 +63,18 @@ export async function searchMangaDex(title: string, anilistId: number, signal?: 
   }).sort((a, b) => Number(b.verified) - Number(a.verified));
 }
 
-/** English chapters only for the first checkpoint, newest first, up to 100. */
+/** Fetch all available English chapter pages, bounded to avoid excessive API requests. */
 export async function listMangaDexChapters(mangaId: string, signal?: AbortSignal): Promise<MangaDexChapter[]> {
   if (!UUID.test(mangaId)) throw new Error("Invalid MangaDex title.");
-  const params = new URLSearchParams({ limit: "100", offset: "0", "translatedLanguage[]": "en", "order[chapter]": "desc", "includes[]": "scanlation_group" });
-  const payload = object(await getJson(`${API}?id=${encodeURIComponent(mangaId)}`, signal));
-  return array(payload.data).flatMap((item) => {
+  const all: unknown[] = [];
+  for (let offset = 0; offset <= 10000; offset += 100) {
+    const payload = object(await getJson(`${API}?id=${encodeURIComponent(mangaId)}&offset=${offset}`, signal));
+    const batch = array(payload.data);
+    all.push(...batch);
+    const total = Number(payload.total);
+    if (batch.length < 100 || (Number.isFinite(total) && all.length >= total)) break;
+  }
+  return all.flatMap((item) => {
     const row = object(item);
     const id = str(row.id);
     if (!UUID.test(id)) return [];
