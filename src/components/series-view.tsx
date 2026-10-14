@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { READING_STATUSES, type Series } from "@/domain/types";
+import { READING_STATUSES, type Series, type SavedTitle } from "@/domain/types";
 import { formatChapterNumber, formatDate, pluralize } from "@/lib/format";
 import { getChapterState, getResumeTarget, getSeriesProgressFraction } from "@/lib/selectors";
 import { useUserData } from "@/state/use-user-data";
-import { AddToLibraryButton } from "./add-button";
+import { AddToLibraryButton, SaveTitleButton } from "./add-button";
 import { Cover } from "./cover";
 import { BackIcon, CheckIcon, PlayIcon, SortIcon } from "./icons";
 import { ProgressBar, SectionHeader, TypeBadge } from "./ui";
@@ -19,7 +19,7 @@ const PUBLICATION_LABEL = {
   upcoming: "Upcoming",
 } as const;
 
-export function SeriesView({ series }: { series: Series }) {
+export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?: SavedTitle }) {
   const { data, actions } = useUserData();
   const [newestFirst, setNewestFirst] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -74,7 +74,7 @@ export function SeriesView({ series }: { series: Series }) {
         ) : (
           <span className="btn btn--secondary btn--large" aria-disabled="true">No chapters yet</span>
         )}
-        <AddToLibraryButton seriesId={series.id} title={series.title} />
+        {savedTitle ? <SaveTitleButton title={savedTitle} /> : <AddToLibraryButton seriesId={series.id} title={series.title} />}
       </div>
 
       {data && progress && (
