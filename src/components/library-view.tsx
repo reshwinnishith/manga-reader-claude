@@ -65,7 +65,7 @@ export function LibraryView() {
           e.target.value = "";
         }} />
       </div>
-      {backupMessage && <p role="status" className="muted">{backupMessage}</p>
+      {backupMessage && <p role="status" className="muted">{backupMessage}</p>}
 
       <div className="search">
         <DiscoverIcon width={20} height={20} />
