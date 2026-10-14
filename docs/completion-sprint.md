@@ -117,7 +117,7 @@ Remaining work, ranked:
    documented per-source rights/identity evidence; OPM stays external until then.
 3. P1: resolve the lint dependency advisory with a compatible patched toolchain.
 4. P2: background chapter refresh, richer release/language selection, resilient
-   expired-image-manifest refresh, and an explicit corrupt-storage recovery UI.
+   expired-image-manifest refresh, and a guided corrupt-storage restore flow (original-record download was added in the PR review follow-up).
 5. P2: evaluate offline shell support separately; no offline manga downloads.
 
 ## Files changed
@@ -157,3 +157,23 @@ Remaining work, ranked:
 - `src/state/user-data-store.test.ts`
 - `src/state/user-data-store.ts`
 - `docs/completion-sprint.md` (this report)
+
+## PR review follow-up: original recovery and saved translations
+
+The recovery warning now distinguishes original stored-data download from session
+JSON export. The browser-returned original text is retained unparsed, and its
+UTF-16 code units can be downloaded losslessly as a UTF-16LE text file, including
+malformed Unicode and original whitespace. Downloads do not modify localStorage.
+If browser storage access is denied, the warning states that original-data download
+is unavailable. The Library export is labeled `Export session data` in recovery
+mode, with a separate filename; imports accurately report session-only results.
+An existing empty record is also preserved rather than treated as missing storage.
+
+Release ranking now explicitly orders confirmed in-app readability before saved
+ID preference and publication date. A readable saved translation wins over newer
+duplicates of the same chapter/volume in either feed order; unavailable, unknown,
+or external-only saved releases cannot displace a confirmed readable release.
+Regression tests cover both cases and lossless recovery/download behavior.
+
+Review-follow-up validation: `npm run check` passed TypeScript, lint, all **199
+tests across 15 files**, and the production build. `git diff --check` passed.

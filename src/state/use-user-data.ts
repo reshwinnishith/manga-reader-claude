@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useSyncExternalStore } from "react";
+import type { StorageRecovery } from "@/services/persistence";
 import type { UserData } from "@/domain/types";
 import { getAppStore, type UserDataStore } from "./user-data-store";
 
@@ -15,8 +16,8 @@ export function useStore(): UserDataStore {
  * during server render and hydration), so pages should render a loading state
  * for null. `actions` is the stable store itself.
  */
-export function useUserData(): { data: UserData | null; actions: UserDataStore; warning?: string } {
+export function useUserData(): { data: UserData | null; actions: UserDataStore; warning?: string; recovery?: StorageRecovery } {
   const store = useStore();
   const data = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
-  return { data, actions: store, warning: data ? store.getPersistenceWarning() : undefined };
+  return { data, actions: store, warning: data ? store.getPersistenceWarning() : undefined, recovery: data ? store.getPersistenceRecovery() : undefined };
 }

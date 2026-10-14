@@ -18,7 +18,7 @@ const emptyCounts = (): Record<LibraryFilter, number> => ({
 
 export function LibraryView() {
   const catalog = useAllSeries();
-  const { data, actions } = useUserData();
+  const { data, actions, recovery } = useUserData();
   const importRef = useRef<HTMLInputElement>(null);
   const [backupMessage, setBackupMessage] = useState("");
   const [filter, setFilter] = useState<LibraryFilter>("all");
@@ -48,9 +48,9 @@ export function LibraryView() {
           const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = url; a.download = "mangareader-library-backup.json"; a.click();
+          a.href = url; a.download = recovery ? "mangareader-session-data.json" : "mangareader-library-backup.json"; a.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }}>Export backup</button>
+        }}>{recovery ? "Export session data" : "Export backup"}</button>
         <button className="btn btn--secondary btn--compact" type="button" onClick={() => importRef.current?.click()}>Import backup</button>
         <input ref={importRef} type="file" accept=".json,application/json" style={{ display: "none" }} aria-label="Import library backup" onChange={async (e) => {
           const file = e.target.files?.[0];
@@ -60,11 +60,12 @@ export function LibraryView() {
             if (!parsed) throw new Error("Invalid backup");
             if (!window.confirm("Replace your current library and reading progress with this backup?")) return;
             actions.replaceData(parsed);
-            setBackupMessage("Backup restored.");
+            setBackupMessage(recovery ? "Backup loaded into this session only. The original stored record is unchanged; session changes cannot be saved." : "Backup restored.");
           } catch { setBackupMessage("Couldn't read this backup file."); }
           e.target.value = "";
         }} />
       </div>
+      {recovery && <p className="notice">Session export contains only data from this session. It does not contain your original stored library. Use Download original stored data in the recovery warning when available.</p>}
       {backupMessage && <p role="status" className="muted">{backupMessage}</p>}
 
       <div className="search">

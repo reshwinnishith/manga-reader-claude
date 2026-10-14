@@ -111,15 +111,21 @@ function safeExternalUrl(value: unknown): string | undefined {
   try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined; } catch { return undefined; }
 }
 
-/** Stable release selection: prefer local pages, then newest publication, then ID.
+/** Stable release selection: readable pages first, then saved IDs, then newest publication and ID.
  * Numberless specials remain distinct; volume prevents merging restarted numbering.
  * Callers may supply saved chapter IDs so rereads retain the chosen translation.
  */
 export function selectChapters(chapters: MangaDexChapter[], preferred: string[] = []): MangaDexChapter[] {
   const selected = new Map<string, MangaDexChapter>();
   const numeric = (value: string) => /^\d+(?:\.\d+)?$/.test(value);
-  const rank = (c: MangaDexChapter) => Number(c.readable !== false) * 2 + Number(preferred.includes(c.id));
-  for (const c of [...chapters].sort((a, b) => rank(b) - rank(a) || (b.publishedAt || "").localeCompare(a.publishedAt || "") || a.id.localeCompare(b.id))) {
+  const saved = new Set(preferred);
+  const readable = (c: MangaDexChapter) => c.readable === true && !c.externalUrl;
+  // Availability outranks history. Within readable duplicates, history outranks
+  // publication date in either feed order. Unknown availability is not readable.
+  for (const c of [...chapters].sort((a, b) =>
+    Number(readable(b)) - Number(readable(a)) ||
+    Number(readable(b) && saved.has(b.id)) - Number(readable(a) && saved.has(a.id)) ||
+    (b.publishedAt || "").localeCompare(a.publishedAt || "") || a.id.localeCompare(b.id))) {
     const key = numeric(c.number) ? `${c.volume || ""}:${Number(c.number)}` : c.id;
     if (!selected.has(key)) selected.set(key, c);
   }

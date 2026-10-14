@@ -33,7 +33,10 @@ complete. The current MangaDex endpoint has a 10,000-offset bound; the app
 reports that limitation. Chapter lists and source resolutions have bounded,
 two-minute in-memory caches. These are performance caches, not offline downloads.
 
-Release selection prefers readable pages, then a saved translation, then newest
+Release selection requires confirmed in-app readability before applying saved-ID
+preference; unavailable, unknown and external-only saved releases cannot displace
+a readable release. Within readable duplicates, a saved translation wins over a
+newer translation regardless of feed order. Remaining ties use newest
 publication and a stable ID. Numbered releases are deduplicated within a volume;
 chapter zero and decimals remain valid. Numberless specials remain separate.
 External-only and unavailable entries are visible but never sent to the image

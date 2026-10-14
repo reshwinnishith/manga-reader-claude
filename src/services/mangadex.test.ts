@@ -63,3 +63,29 @@ describe("chapter lists", () => {
     await expect(searchMangaDex("title", 1)).rejects.toThrow("busy");
   });
 });
+
+describe("saved translation preference regressions", () => {
+  it.each([false, true])("keeps the older saved readable release regardless of feed ordering (reverse=%s)", (reverse) => {
+    const saved = chapter(11, "12.5", { volume: "2", publishedAt: "2020-01-01", groupNames: ["Saved team"] });
+    const newer = chapter(12, "12.50", { volume: "2", publishedAt: "2026-10-14", groupNames: ["New team"] });
+    const otherVolume = chapter(13, "12.5", { volume: "3", publishedAt: "2026-10-14" });
+    const feed = [saved, newer, otherVolume];
+    const selected = selectChapters(reverse ? feed.reverse() : feed, [saved.id]);
+    expect(selected.find((c) => c.volume === "2")).toEqual(saved);
+    expect(selected.find((c) => c.volume === "3")).toEqual(otherVolume);
+  });
+
+  it.each([false, undefined])("prefers a readable duplicate over saved availability=%s", (readable) => {
+    const saved = chapter(21, "3", { volume: "1", readable, publishedAt: "2026-10-14" });
+    const available = chapter(22, "3.0", { volume: "1", readable: true, publishedAt: "2020-01-01" });
+    for (const feed of [[saved, available], [available, saved]]) {
+      expect(selectChapters(feed, [saved.id])).toEqual([available]);
+    }
+  });
+
+  it("does not prioritize a saved external-only release over in-app pages", () => {
+    const external = chapter(31, "1", { volume: "1", externalUrl: "https://publisher.example/read", publishedAt: "2026-10-14" });
+    const available = chapter(32, "1", { volume: "1", publishedAt: "2020-01-01" });
+    expect(selectChapters([external, available], [external.id])).toEqual([available]);
+  });
+});
