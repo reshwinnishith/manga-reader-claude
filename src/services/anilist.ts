@@ -90,6 +90,12 @@ const SEARCH_QUERY = /* GraphQL */ `
   }
 `;
 
+// AniList's optional country filter is omitted entirely for All searches.
+// This avoids passing a null country condition to the live API.
+const ALL_COUNTRIES_QUERY = SEARCH_QUERY
+  .replace(", $country: CountryCode", "")
+  .replace("        countryOfOrigin: $country\n", "");
+
 // ---- Rate limiting ---------------------------------------------------------
 
 export interface RateLimiter {
@@ -256,8 +262,10 @@ export function createAniListClient(deps: AniListClientDeps = {}): AniListClient
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({
-            query: SEARCH_QUERY,
-            variables: { search, page, perPage: PAGE_SIZE, country: country === "all" ? null : country },
+            query: country === "all" ? ALL_COUNTRIES_QUERY : SEARCH_QUERY,
+            variables: country === "all"
+              ? { search, page, perPage: PAGE_SIZE }
+              : { search, page, perPage: PAGE_SIZE, country },
           }),
           signal,
           referrerPolicy: "no-referrer",
