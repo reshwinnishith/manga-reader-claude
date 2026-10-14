@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import type { SavedTitle, SeriesType } from "@/domain/types";
 import { searchCatalog } from "@/lib/selectors";
 import { seriesFromSaved } from "@/lib/series-from-saved";
@@ -172,30 +171,18 @@ export function DiscoverView({ client }: { client?: AniListClient }) {
 }
 
 function ResultCard({ title: t }: { title: SavedTitle }) {
-  const { data, actions } = useUserData();
-  const router = useRouter();
+  const { data } = useUserData();
   const series = seriesFromSaved(t);
   const saved = !!data?.library[t.id];
   const meta = [t.authors[0], t.year].filter(Boolean).join(" · ");
   const details = [STATUS_LABEL[t.status], t.reportedChapters ? `${t.reportedChapters} chapters` : null].filter(Boolean).join(" · ");
 
   return (
-    <li className="dcard" role="link" tabIndex={0} aria-label={`Open ${t.title}`} onClick={(e) => { if ((e.target as HTMLElement).closest("button, a")) return; if (!saved) actions.saveExternalTitle(t); router.push(`/series/${t.id}`); }} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!saved) actions.saveExternalTitle(t); router.push(`/series/${t.id}`); } }} style={{ cursor: "pointer" }}>
-      {saved ? (
-        <Link href={`/series/${t.id}`} className="dcard__cover" aria-label={`Open ${t.title}`}>
-          <Cover series={series} />
-        </Link>
-      ) : (
-        <div className="dcard__cover">
-          <Cover series={series} />
-        </div>
-      )}
+    <li className="dcard" style={{ position: "relative" }}>
+      <div className="dcard__cover"><Cover series={series} /></div>
       <div className="dcard__body">
-        {saved ? (
-          <Link href={`/series/${t.id}`} className="dcard__title">{t.title}</Link>
-        ) : (
-          <span className="dcard__title">{t.title}</span>
-        )}
+        <Link href={`/series/${t.id}`} aria-label={`Open ${t.title}`} style={{ position: "absolute", inset: 0, zIndex: 1 }} />
+        <span className="dcard__title">{t.title}</span>
         <span className="dcard__meta">
           <TypeBadge type={t.type} /> {meta}
         </span>
@@ -205,7 +192,7 @@ function ResultCard({ title: t }: { title: SavedTitle }) {
         ) : (
           <p className="dcard__desc dcard__desc--empty">No description available.</p>
         )}
-        <div className="dcard__links">
+        <div className="dcard__links" style={{ position: "relative", zIndex: 2 }}>
           <div className="dcard__actions">
             <SaveTitleButton title={t} compact />
           </div>
