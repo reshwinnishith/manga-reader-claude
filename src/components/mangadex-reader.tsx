@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-export function MangaDexReader({ id }: { id: string }) {
+export function MangaDexReader({ id, group }: { id: string; group: string }) {
   const [count, setCount] = useState(0);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"scroll" | "paged">("scroll");
@@ -31,7 +31,7 @@ export function MangaDexReader({ id }: { id: string }) {
         <strong>Chapter reader</strong>
         <button type="button" onClick={() => setMode(mode === "scroll" ? "paged" : "scroll")}>{mode === "scroll" ? "Paged" : "Scroll"}</button>
       </header>
-      <p style={{ textAlign: "center", fontSize: 12, opacity: 0.7 }}>Pages via MangaDex · Credit belongs to the original scanlation group</p>
+      <p style={{ textAlign: "center", fontSize: 12, opacity: 0.7 }}>Pages via MangaDex · Translation: {group}</p>
       {loading && <p role="status">Loading chapter…</p>}
       {error && <p role="alert">{error}</p>}
       {count > 0 && (mode === "scroll" ? (
