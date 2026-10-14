@@ -9,14 +9,22 @@ import { renderWithApp } from "@/test/helpers";
 
 const id = "12345678-1234-4123-8123-123456789001";
 const second = "12345678-1234-4123-8123-123456789002";
+const licensedFan = "12345678-1234-4123-8123-123456789003";
 const mangaId = "12345678-1234-4123-8123-123456789000";
 const title = normalizeMedia({ id: 74347, title: { english: "One-Punch Man" }, status: "FINISHED" }, "now")!;
 const initial = () => saveExternalTitle(emptyUserData(), title, "now");
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const release = (chapterId: string, number: string, extra: Record<string, unknown> = {}) => ({
+  id: chapterId, number, volume: "", title: "", language: "en", pages: 3, groups: ["Test team"], publishedAt: "2026-01-01", readable: true, ...extra,
+});
 
 beforeEach(() => {
   vi.stubGlobal("scrollTo", vi.fn());
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/chapter/") ? response({ pageCount: 3, seriesId: title.id, number: "1", group: "Test team", mangaId }) : response({ data: [id, second].map((id, i) => ({ id, attributes: { chapter: String(i + 1), pages: 3, translatedLanguage: "en" } })), total: 2 })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ pageCount: 3, seriesId: title.id, number: "1", group: "Test team", mangaId });
+    if (url.includes("/api/sources/mangadex")) return response({ releases: [release(id, "1"), release(second, "2")] });
+    return response({ error: "unexpected" }, 500);
+  }));
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -59,10 +67,28 @@ it("restores scroll position without requesting earlier pages and keeps backup p
   expect(screen.getByRole("link", { name: /One-Punch Man.*Resume page 2 of 3/ })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${id}`));
 });
 
-it("resolves next chapters from the complete feed rather than URL navigation hints", async () => {
+it("resolves next chapters from the classified edition feed rather than URL navigation hints", async () => {
   renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} next={{ id: mangaId, number: "999" }} />, initial());
   expect(await screen.findByRole("link", { name: "Chapter 2 →" })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${second}`));
   expect(screen.queryByRole("link", { name: /999/ })).not.toBeInTheDocument();
+  expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining(`/api/sources/mangadex?manga=${mangaId}`), expect.any(Object));
+});
+
+it("omits licensed fan uploads from reader previous/next navigation", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ pageCount: 3, seriesId: title.id, number: "1", group: "Official", mangaId });
+    // Server already withheld the licensed fan upload from `releases`.
+    if (url.includes("/api/sources/mangadex")) return response({
+      releases: [release(id, "1", { groups: ["Official"] }), release(second, "3", { groups: ["Official"] })],
+      hidden: { "licensed-in-english": 1 },
+      licensedInEnglish: true,
+    });
+    return response({ error: "unexpected" }, 500);
+  }));
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  expect(await screen.findByRole("link", { name: "Chapter 3 →" })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${second}`));
+  expect(screen.queryByRole("link", { name: new RegExp(licensedFan) })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Chapter 2/)).not.toBeInTheDocument();
 });
 
 it("rejects a chapter belonging to a different edition without recording progress", async () => {
@@ -73,7 +99,10 @@ it("rejects a chapter belonging to a different edition without recording progres
 });
 
 it("shows removed chapter errors and supports a successful retry", async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(response({ error: "Chapter removed" }, 502)).mockResolvedValueOnce(response({ pageCount: 1, seriesId: title.id, number: "0", group: "Team", mangaId })).mockResolvedValue(response({ data: [], total: 0 }));
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(response({ error: "Chapter removed" }, 502))
+    .mockResolvedValueOnce(response({ pageCount: 1, seriesId: title.id, number: "0", group: "Team", mangaId }))
+    .mockResolvedValue(response({ releases: [] }));
   vi.stubGlobal("fetch", fetcher);
   renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
   expect(await screen.findByRole("alert")).toHaveTextContent("Chapter removed");

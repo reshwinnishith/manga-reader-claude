@@ -5,8 +5,8 @@ import { PersistenceNotice } from "./persistence-notice";
 import { useEffect, useRef, useState } from "react";
 import { useUserData } from "@/state/use-user-data";
 import { seriesFromSaved } from "@/lib/series-from-saved";
-import { listMangaDexChapters, selectChapters, type MangaDexChapter } from "@/services/mangadex";
-import { readerUrl } from "@/services/reading-sources";
+import { selectChapters, type MangaDexChapter } from "@/services/mangadex";
+import { editionChapters, readerUrl } from "@/services/reading-sources";
 
 type ChapterInfo = { pageCount: number; seriesId: string; number: string; group: string; mangaId: string };
 
@@ -90,7 +90,8 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
   }, [mode, page, id, info.pageCount]);
   useEffect(() => {
     const controller = new AbortController();
-    listMangaDexChapters(info.mangaId, controller.signal).then((result) => {
+    // Same classified release feed as the chapter list (licensed/uncredited withheld).
+    editionChapters(info.mangaId, controller.signal).then((result) => {
       if (!controller.signal.aborted) setChapters(selectChapters(result, [id]));
     }).catch(() => { if (!controller.signal.aborted) setNavigationError("Chapter navigation unavailable. Return to Chapters to retry."); });
     return () => controller.abort();
