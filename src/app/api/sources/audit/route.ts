@@ -11,7 +11,13 @@ import { chapterManifest } from "@/services/mangadex-pages";
 let recent: number[] = [];
 
 export async function GET(request: NextRequest) {
+  // Audit is an internal diagnostic, never a public preview endpoint.
+  // Require an explicitly configured secret even outside production.
   if (process.env.VERCEL_ENV === "production") return NextResponse.json({ error: "Not available." }, { status: 404 });
+  const auditToken = process.env.SOURCE_AUDIT_TOKEN;
+  if (!auditToken || request.headers.get("authorization") !== `Bearer ${auditToken}`) {
+    return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
   const now = Date.now();
   recent = recent.filter((t) => now - t < 60_000);
   if (recent.length >= 20) return NextResponse.json({ error: "Audit rate limit: 20 titles/minute." }, { status: 429 });
