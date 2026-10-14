@@ -303,27 +303,30 @@ export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fet
   if (hit) return hit;
   const base = { providerId: "mangadex" as const, officialLinks: [], licensedInEnglish: false, releases: [], hidden: {}, checkedAt: new Date().toISOString() };
 
-  let match: MangaRecord | undefined;
-  let verifiedBy: VerifiedBy | undefined;
+  // Check every alias before choosing an edition. The first search result may
+  // match while a later alias exposes a second, conflicting verified edition.
+  const matches = new Map<string, { record: MangaRecord; by: VerifiedBy }>();
   let conflict = false;
   for (const title of titles) {
     const candidates = await searchMangaDex(title, fetchImpl);
-    const verified = candidates
-      .map((c) => ({ c, v: verifyIdentity(c.links, input.anilistId, input.malId) }))
-      .filter((x) => x.v.verified);
-    const unique = [...new Map(verified.map((x) => [x.c.id, x])).values()];
-    if (unique.length > 1) {
-      const result: ResolvedEdition = { ...base, status: "conflict" };
-      resolveCache.set(key, result);
-      return result;
+    for (const candidate of candidates) {
+      const verification = verifyIdentity(candidate.links, input.anilistId, input.malId);
+      if (verification.verified && verification.by) {
+        matches.set(candidate.id, { record: candidate, by: verification.by });
+      } else if (verification.conflict && candidate.links.mal === String(input.malId ?? "")) {
+        conflict = true;
+      }
     }
-    if (unique[0]) {
-      match = unique[0].c;
-      verifiedBy = unique[0].v.by;
-      break;
-    }
-    conflict ||= candidates.some((c) => verifyIdentity(c.links, input.anilistId, input.malId).conflict && c.links.mal === String(input.malId ?? ""));
+    if (matches.size > 1) break;
   }
+  if (matches.size > 1) {
+    const result: ResolvedEdition = { ...base, status: "conflict" };
+    resolveCache.set(key, result);
+    return result;
+  }
+  const selected = matches.values().next().value;
+  const match = selected?.record;
+  const verifiedBy = selected?.by;
   if (!match) {
     // A MyAnimeList match whose AniList link points elsewhere is a conflict, not a match.
     const result: ResolvedEdition = { ...base, status: conflict ? "conflict" : "not-found" };
