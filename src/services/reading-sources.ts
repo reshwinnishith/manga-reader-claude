@@ -108,6 +108,8 @@ export function officialDestinations(title: Pick<SavedTitle, "externalId"> & Par
 
 export const readingProviders: readonly ReadingSourceProvider[] = [mangaDexProvider];
 const cache = new Map<string, { expires: number; editions: SourceEdition[] }>();
+/** Test-only: drop the short-lived browser discovery cache between cases. */
+export function clearReadingSourceCache() { cache.clear(); }
 export async function discoverReadingSources(title: SavedTitle, signal?: AbortSignal): Promise<SourceEdition[]> {
   const key = `${title.externalId}:${title.malId ?? ""}:${title.title}`;
   const hit = cache.get(key);
