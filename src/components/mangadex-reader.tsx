@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useUserData } from "@/state/use-user-data";
 import { seriesFromSaved } from "@/lib/series-from-saved";
 
 export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }: { id: string; group: string; seriesId?: string; chapterNumber?: string }) {
   const { data, actions } = useUserData();
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"scroll" | "paged">("scroll");
@@ -28,7 +29,18 @@ export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }:
       .catch((err: unknown) => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load chapter"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [id]);
+  }, [id, seriesId, chapterNumber]);
+
+  useEffect(() => {
+    if (mode !== "scroll" || !count || !scrollRef.current) return;
+    const elements = Array.from(scrollRef.current.querySelectorAll<HTMLImageElement>("img[data-page]"));
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setPage(Number((visible.target as HTMLElement).dataset.page) || 0);
+    }, { threshold: [0.25, 0.5, 0.75] });
+    elements.forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [mode, count]);
 
   useEffect(() => {
     if (!seriesId || !chapterNumber || !count) return;
@@ -36,7 +48,7 @@ export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }:
     const saved = data?.savedTitles[seriesId];
     if (saved) {
       const base = seriesFromSaved(saved);
-      const series = { ...base, chapters: [{ id, number: Number(chapterNumber) || 0, title: `Chapter ${chapterNumber}`, pageCount: count, releasedAt: new Date().toISOString() }] };
+      const series = { ...base, status: "ongoing" as const, chapters: [{ id, number: Number(chapterNumber) || 0, title: `Chapter ${chapterNumber}`, pageCount: count, releasedAt: new Date().toISOString() }] };
       actions.recordProgress(series, id, page);
     }
   }, [seriesId, chapterNumber, count, page, id, data?.savedTitles, actions]);
@@ -52,11 +64,11 @@ export function MangaDexReader({ id, group, seriesId = "", chapterNumber = "" }:
       {loading && <p role="status">Loading chapter…</p>}
       {error && <p role="alert">{error}</p>}
       {count > 0 && (mode === "scroll" ? (
-        <div style={{ maxWidth: 850, margin: "auto" }}><p style={{ textAlign: "center" }}>Scroll reading · For page-by-page progress, switch to Paged mode.</p>
+        <div ref={scrollRef} style={{ maxWidth: 850, margin: "auto" }}><p style={{ textAlign: "center" }}>Scroll reading · Your position is saved automatically.</p>
           {Array.from({ length: count }, (_, index) => (
             // Images are proxied by our own server to respect MangaDex image host restrictions.
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={index} src={`/api/mangadex/page/${id}/${index}`} alt={`Page ${index + 1}`} loading={index < 2 ? "eager" : "lazy"} style={{ width: "100%", height: "auto", display: "block" }} />
+            <img key={index} data-page={index} src={`/api/mangadex/page/${id}/${index}`} alt={`Page ${index + 1}`} loading={index < 2 ? "eager" : "lazy"} style={{ width: "100%", height: "auto", display: "block" }} />
           ))}
         </div>
       ) : (
