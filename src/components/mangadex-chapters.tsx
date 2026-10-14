@@ -42,9 +42,9 @@ export function MangaDexChapters({ title, anilistId }: { title: string; anilistI
     {!loading && found && chapters.length === 0 && <p className="muted">No readable English chapters found for this edition.</p>}
     {chapters.length > 0 && <><p className="muted">Verified edition on MangaDex · {chapters.length} English chapters found</p>
       <ul className="chapters">{chapters.map((chapter, index) => <li key={chapter.id}>
-        <Link className="chapter" href={`/mangadex/read/${chapter.id}?group=${encodeURIComponent(chapter.groupNames.join(", ") || "MangaDex")}&series=${encodeURIComponent(`al-${anilistId}`)}&chapter=${encodeURIComponent(chapter.number)}${index > 0 ? `&prev=${chapters[index - 1].id}&prevNumber=${encodeURIComponent(chapters[index - 1].number)}` : ""}${index < chapters.length - 1 ? `&next=${chapters[index + 1].id}&nextNumber=${encodeURIComponent(chapters[index + 1].number)}` : ""}`}>
+        <Link className="chapter" href={`/mangadex/read/${chapter.id}?group=${encodeURIComponent(chapter.groupNames.join(", ") || "MangaDex")}&series=${encodeURIComponent(`al-${anilistId}`)}&chapter=${encodeURIComponent(chapter.number)}${index > 0 ? `&prev=${chapters[index - 1]!.id}&prevNumber=${encodeURIComponent(chapters[index - 1]!.number)}` : ""}${index < chapters.length - 1 ? `&next=${chapters[index + 1]!.id}&nextNumber=${encodeURIComponent(chapters[index + 1]!.number)}` : ""}`}>
           <span className="chapter__num">{chapter.number}</span>
-          <span className="chapter__body"><span className="chapter__title">{chapter.title || `Chapter ${chapter.number}`}</span><span className="chapter__meta">{data?.progress[`al-${anilistId}`]?.chapters[chapter.id] ? `Resume page ${data.progress[`al-${anilistId}`].chapters[chapter.id].page + 1} · ` : ""}Read in MangaReader · {chapter.groupNames.join(", ") || "MangaDex"}</span></span>
+          <span className="chapter__body"><span className="chapter__title">{chapter.title || `Chapter ${chapter.number}`}</span><span className="chapter__meta">{data?.progress[`al-${anilistId}`]?.chapters[chapter.id] ? `Resume page ${data.progress[`al-${anilistId}`]!.chapters[chapter.id]!.page + 1} · ` : ""}Read in MangaReader · {chapter.groupNames.join(", ") || "MangaDex"}</span></span>
         </Link>
       </li>)}</ul>
     </>}
