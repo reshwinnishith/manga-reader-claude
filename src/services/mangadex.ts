@@ -3,7 +3,7 @@
  * Public API: https://api.mangadex.org/docs
  * Keep MangaDex and scanlation group credits visible when adding a reader.
  */
-const API = "https://api.mangadex.org";
+const API = "/api/mangadex/discover";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface MangaDexTitle {
@@ -38,7 +38,7 @@ export async function searchMangaDex(title: string, signal?: AbortSignal): Promi
   const query = title.trim();
   if (query.length < 2) return [];
   const params = new URLSearchParams({ title: query, limit: "10", "contentRating[]": "safe" });
-  const payload = object(await getJson(`${API}/manga?${params}`, signal));
+  const payload = object(await getJson(`${API}?${params}`, signal));
   return array(payload.data).flatMap((item) => {
     const row = object(item);
     const id = str(row.id);
@@ -53,7 +53,7 @@ export async function searchMangaDex(title: string, signal?: AbortSignal): Promi
 export async function listMangaDexChapters(mangaId: string, signal?: AbortSignal): Promise<MangaDexChapter[]> {
   if (!UUID.test(mangaId)) throw new Error("Invalid MangaDex title.");
   const params = new URLSearchParams({ limit: "100", offset: "0", "translatedLanguage[]": "en", "order[chapter]": "desc", "includes[]": "scanlation_group" });
-  const payload = object(await getJson(`${API}/manga/${mangaId}/feed?${params}`, signal));
+  const payload = object(await getJson(`${API}?id=${encodeURIComponent(mangaId)}`, signal));
   return array(payload.data).flatMap((item) => {
     const row = object(item);
     const id = str(row.id);
