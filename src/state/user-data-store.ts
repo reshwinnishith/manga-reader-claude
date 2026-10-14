@@ -6,6 +6,7 @@ import * as ops from "@/lib/user-data";
 export interface UserDataStore {
   /** Current data, or null on the server / before first client load. */
   getSnapshot(): UserData | null;
+  getPersistenceWarning(): string | undefined;
   getServerSnapshot(): null;
   subscribe(listener: () => void): () => void;
   addToLibrary(seriesId: string, status?: ReadingStatus): void;
@@ -60,6 +61,7 @@ export function createUserDataStore({
   };
 
   return {
+    getPersistenceWarning: () => adapter.getWarning?.(),
     getSnapshot() {
       if (typeof window === "undefined") return null;
       if (state === null) state = load();

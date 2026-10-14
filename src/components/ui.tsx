@@ -89,7 +89,7 @@ export function SeriesCard({ series, caption, badge }: { series: Series; caption
         {badge && <span className="card__badge">{badge}</span>}
       </div>
       <span className="card__title">{series.title}</span>
-      <span className="card__caption">{caption ?? series.genres.join(" · ")}</span>
+      <span className="card__caption">{!series.source ? "Demo · " : ""}{caption ?? series.genres.join(" · ")}</span>
     </Link>
   );
 }

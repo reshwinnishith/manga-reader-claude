@@ -163,6 +163,7 @@ function parseSavedTitle(id: string, value: unknown): SavedTitle | null {
     coverUrl: typeof value.coverUrl === "string" && /^https:\/\//.test(value.coverUrl) ? value.coverUrl : undefined,
     genres: isStringArray(value.genres) ? value.genres : [],
     authors: isStringArray(value.authors) ? value.authors : [],
+    alternateTitles: isStringArray(value.alternateTitles) ? value.alternateTitles : undefined,
     year: typeof value.year === "number" ? value.year : undefined,
     status:
       typeof value.status === "string" && PUBLICATION_STATUSES.has(value.status)

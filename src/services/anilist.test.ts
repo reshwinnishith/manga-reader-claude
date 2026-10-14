@@ -77,7 +77,7 @@ describe("search request", () => {
     expect(body.variables).toEqual({ search: "moon", page: 1, perPage: 20 });
     expect(body.query).not.toContain("$country: CountryCode");
     expect(body.query).not.toContain("countryOfOrigin: $country");
-    expect(body.query).toContain("countryOfOrigin\\n");
+    expect(body.query).toContain("countryOfOrigin\n");
   });
 
   it("does not call the API for queries that are too short", async () => {

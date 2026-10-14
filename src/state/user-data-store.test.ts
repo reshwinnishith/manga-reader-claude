@@ -45,9 +45,9 @@ describe("user data store", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("seeds demo data only when nothing is stored", () => {
+  it("starts empty without reseeding demo data", () => {
     const store = createUserDataStore({ adapter: createMemoryAdapter(), now: () => "x" });
-    expect(Object.keys(store.getSnapshot()!.library).length).toBeGreaterThan(0);
+    expect(Object.keys(store.getSnapshot()!.library)).toHaveLength(0);
   });
 
   it("recovers from corrupt stored data", () => {

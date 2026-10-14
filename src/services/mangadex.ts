@@ -15,14 +15,8 @@ export interface MangaDexTitle {
   coverUrl?: string;
 }
 
-export interface MangaDexChapter {
-  id: string;
-  number: string;
-  title: string;
-  language: string;
-  groupNames: string[];
-  url: string;
-}
+/** Compatibility alias for the MangaDex transport. */
+export type MangaDexChapter = import("./reading-source-types").SourceChapter;
 
 async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
   // Preserve preview authentication cookies for our own API.
@@ -44,7 +38,7 @@ const str = (value: unknown): string => typeof value === "string" ? value : "";
 export async function searchMangaDex(title: string, anilistId: number, signal?: AbortSignal): Promise<MangaDexTitle[]> {
   const query = title.trim();
   if (query.length < 2) return [];
-  const params = new URLSearchParams({ title: query, limit: "100", "contentRating[]": "safe" });
+  const params = new URLSearchParams({ title: query });
   const payload = object(await getJson(`${API}?${params}`, signal));
   return array(payload.data).flatMap((item) => {
     const row = object(item);
@@ -63,18 +57,25 @@ export async function searchMangaDex(title: string, anilistId: number, signal?: 
   }).sort((a, b) => Number(b.verified) - Number(a.verified));
 }
 
+const chapterCache = new Map<string, { expires: number; chapters: MangaDexChapter[] }>();
+
 /** Fetch all available English chapter pages, bounded to avoid excessive API requests. */
 export async function listMangaDexChapters(mangaId: string, signal?: AbortSignal): Promise<MangaDexChapter[]> {
   if (!UUID.test(mangaId)) throw new Error("Invalid MangaDex title.");
+  const cached = chapterCache.get(mangaId);
+  if (cached && cached.expires > Date.now()) return cached.chapters;
   const all: unknown[] = [];
+  let complete = false;
   for (let offset = 0; offset <= 10000; offset += 100) {
     const payload = object(await getJson(`${API}?id=${encodeURIComponent(mangaId)}&offset=${offset}`, signal));
     const batch = array(payload.data);
     all.push(...batch);
     const total = Number(payload.total);
-    if (batch.length < 100 || (Number.isFinite(total) && all.length >= total)) break;
+    if (Number.isFinite(total) && offset + batch.length >= total) { complete = true; break; }
+    if (batch.length === 0) throw new Error("Chapter pagination stopped before all chapters were loaded.");
   }
-  return all.flatMap((item) => {
+  if (!complete) throw new Error("This edition exceeds the source pagination limit. Open MangaDex for the full list.");
+  const chapters = all.flatMap((item) => {
     const row = object(item);
     const id = str(row.id);
     if (!UUID.test(id)) return [];
@@ -86,11 +87,45 @@ export async function listMangaDexChapters(mangaId: string, signal?: AbortSignal
       .filter(Boolean);
     return [{
       id,
-      number: str(attrs.chapter) || "?",
+      number: str(attrs.chapter),
+      volume: str(attrs.volume),
+      externalUrl: safeExternalUrl(attrs.externalUrl),
+      readable: !attrs.externalUrl && attrs.isUnavailable !== true && Number(attrs.pages) > 0,
+      publishedAt: str(attrs.publishAt),
       title: str(attrs.title),
       language: str(attrs.translatedLanguage),
       groupNames: groups,
       url: `https://mangadex.org/chapter/${id}`,
     }];
+  });
+  if (!signal?.aborted) {
+    if (chapterCache.size >= 40) chapterCache.delete(chapterCache.keys().next().value!);
+    chapterCache.set(mangaId, { expires: Date.now() + 120_000, chapters });
+  }
+  return chapters;
+}
+
+/** Do not turn arbitrary feed strings into executable or insecure links. */
+function safeExternalUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined; } catch { return undefined; }
+}
+
+/** Stable release selection: prefer local pages, then newest publication, then ID.
+ * Numberless specials remain distinct; volume prevents merging restarted numbering.
+ * Callers may supply saved chapter IDs so rereads retain the chosen translation.
+ */
+export function selectChapters(chapters: MangaDexChapter[], preferred: string[] = []): MangaDexChapter[] {
+  const selected = new Map<string, MangaDexChapter>();
+  const numeric = (value: string) => /^\d+(?:\.\d+)?$/.test(value);
+  const rank = (c: MangaDexChapter) => Number(c.readable !== false) * 2 + Number(preferred.includes(c.id));
+  for (const c of [...chapters].sort((a, b) => rank(b) - rank(a) || (b.publishedAt || "").localeCompare(a.publishedAt || "") || a.id.localeCompare(b.id))) {
+    const key = numeric(c.number) ? `${c.volume || ""}:${Number(c.number)}` : c.id;
+    if (!selected.has(key)) selected.set(key, c);
+  }
+  return [...selected.values()].sort((a, b) => {
+    if (numeric(a.number) && numeric(b.number)) return Number(a.number) - Number(b.number) || (a.volume || "").localeCompare(b.volume || "", undefined, { numeric: true });
+    if (numeric(a.number) !== numeric(b.number)) return numeric(a.number) ? -1 : 1;
+    return (a.publishedAt || "").localeCompare(b.publishedAt || "") || a.id.localeCompare(b.id);
   });
 }

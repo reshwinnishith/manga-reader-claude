@@ -15,8 +15,8 @@ export function useStore(): UserDataStore {
  * during server render and hydration), so pages should render a loading state
  * for null. `actions` is the stable store itself.
  */
-export function useUserData(): { data: UserData | null; actions: UserDataStore } {
+export function useUserData(): { data: UserData | null; actions: UserDataStore; warning?: string } {
   const store = useStore();
   const data = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
-  return { data, actions: store };
+  return { data, actions: store, warning: data ? store.getPersistenceWarning() : undefined };
 }

@@ -12,7 +12,10 @@ export async function GET(request: NextRequest) {
     url.searchParams.append("includes[]", "cover_art");
     url.searchParams.append("includes[]", "author");
     url.searchParams.append("includes[]", "artist");
-    url.searchParams.set("contentRating[]", "safe");
+    url.searchParams.append("contentRating[]", "safe");
+    // AniList already excludes adult results. Non-adult manga such as OPM
+    // can be suggestive on MangaDex; safe-only search hid the correct edition.
+    url.searchParams.append("contentRating[]", "suggestive");
   } else if (id && MANGADEX_ID.test(id)) {
     url.pathname = `/manga/${id}/feed`;
     url.searchParams.set("limit", "100");

@@ -11,20 +11,23 @@ import { BlockSkeleton, EmptyState } from "./ui";
 
 /** Unsaved AniList titles are viewable without silently adding them to Library. */
 export function ExternalSeriesView({ id }: { id: string }) {
+  return <ExternalSeries key={id} id={id} />;
+}
+
+function ExternalSeries({ id }: { id: string }) {
   const { data } = useUserData();
   const saved = data?.savedTitles[id];
   const [remote, setRemote] = useState<SavedTitle | null>(null);
   const [failed, setFailed] = useState(false);
+  const externalId = Number(id.replace(/^al-/, ""));
+  const validId = /^al-\d+$/.test(id) && Number.isSafeInteger(externalId);
   useEffect(() => {
-    if (saved) return;
-    const externalId = Number(id.replace(/^al-/, ""));
-    if (!/^al-\d+$/.test(id) || !Number.isSafeInteger(externalId)) { setFailed(true); return; }
+    if ((saved && saved.description) || !validId) return;
     const controller = new AbortController();
-    setFailed(false);
     fetch(ANILIST_ENDPOINT, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "query ($id: Int) { Media(id: $id, type: MANGA) { id title { english romaji } description(asHtml: false) coverImage { large } status chapters genres startDate { year } countryOfOrigin siteUrl staff(perPage: 3) { edges { node { name { full } } } } } }", variables: { id: externalId } }),
-      signal: controller.signal,
+      body: JSON.stringify({ query: "query ($id: Int) { Media(id: $id, type: MANGA) { id title { english romaji native } synonyms description(asHtml: false) coverImage { large } status chapters genres startDate { year } countryOfOrigin siteUrl staff(perPage: 10, sort: RELEVANCE) { edges { role node { name { full } } } } } }", variables: { id: externalId } }),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
     }).then(async (r) => {
       if (!r.ok) throw new Error("AniList unavailable");
       const json = await r.json();
@@ -33,10 +36,10 @@ export function ExternalSeriesView({ id }: { id: string }) {
       setRemote(title);
     }).catch(() => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
-  }, [id, saved]);
-  const title = saved ?? remote;
+  }, [id, saved, validId, externalId]);
+  const title = useMemo(() => saved ? (remote ? { ...saved, description: remote.description || saved.description } : saved) : remote, [saved, remote]);
   const series = useMemo(() => title ? seriesFromSaved(title) : null, [title]);
-  if (!data || (!series && !failed)) return <BlockSkeleton height={320} />;
+  if (!data || (!series && !failed && validId)) return <BlockSkeleton height={320} />;
   if (!series || !title) return <EmptyState title="Couldn't load this title" body="Check your connection and try searching again." action={{ href: "/discover", label: "Discover" }} />;
-  return <><SeriesView series={series} savedTitle={title} /><MangaDexChapters title={series.title} anilistId={title.externalId} /></>;
+  return <><SeriesView series={series} savedTitle={title} /><MangaDexChapters title={title} /></>;
 }
