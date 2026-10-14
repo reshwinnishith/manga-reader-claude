@@ -21,9 +21,12 @@ export interface MangaDexChapter {
 }
 
 async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
-  const response = await fetch(url, { signal, credentials: "omit", referrerPolicy: "no-referrer" });
+  // Preserve preview authentication cookies for our own API.
+  const response = await fetch(url, { signal, credentials: "same-origin", redirect: "error" });
   if (response.status === 429) throw new Error("MangaDex is busy. Please try again later.");
-  if (!response.ok) throw new Error("Couldn't reach MangaDex. Please try again.");
+  if (!response.ok) throw new Error(`Chapter service returned HTTP ${response.status}.`);
+  const type = response.headers.get("content-type") || "";
+  if (!type.includes("application/json")) throw new Error("Chapter service returned a login page instead of chapter data.");
   return response.json();
 }
 
