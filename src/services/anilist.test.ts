@@ -67,13 +67,17 @@ describe("search request", () => {
     expect(body.query).toContain("isAdult: false");
     expect(body.query).toContain("format_not: NOVEL");
     expect(body.query).toContain("type: MANGA");
+    expect(body.query).toContain("countryOfOrigin: $country");
   });
 
   it("omits the country filter for 'all'", async () => {
     const fetchMock = ok();
     await clientWith(fetchMock).search({ query: "moon" });
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(body.variables.country).toBeNull();
+    expect(body.variables).toEqual({ search: "moon", page: 1, perPage: 20 });
+    expect(body.query).not.toContain("$country: CountryCode");
+    expect(body.query).not.toContain("countryOfOrigin: $country");
+    expect(body.query).toContain("countryOfOrigin\\n");
   });
 
   it("does not call the API for queries that are too short", async () => {
