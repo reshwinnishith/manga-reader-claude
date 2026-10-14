@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { SavedTitle, SeriesType } from "@/domain/types";
 import { searchCatalog } from "@/lib/selectors";
 import { seriesFromSaved } from "@/lib/series-from-saved";
@@ -171,14 +172,15 @@ export function DiscoverView({ client }: { client?: AniListClient }) {
 }
 
 function ResultCard({ title: t }: { title: SavedTitle }) {
-  const { data } = useUserData();
+  const { data, actions } = useUserData();
+  const router = useRouter();
   const series = seriesFromSaved(t);
   const saved = !!data?.library[t.id];
   const meta = [t.authors[0], t.year].filter(Boolean).join(" · ");
   const details = [STATUS_LABEL[t.status], t.reportedChapters ? `${t.reportedChapters} chapters` : null].filter(Boolean).join(" · ");
 
   return (
-    <li className="dcard">
+    <li className="dcard" role="link" tabIndex={0} aria-label={`Open ${t.title}`} onClick={(e) => { if ((e.target as HTMLElement).closest("button, a")) return; if (!saved) actions.saveExternalTitle(t); router.push(`/series/${t.id}`); }} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!saved) actions.saveExternalTitle(t); router.push(`/series/${t.id}`); } }} style={{ cursor: "pointer" }}>
       {saved ? (
         <Link href={`/series/${t.id}`} className="dcard__cover" aria-label={`Open ${t.title}`}>
           <Cover series={series} />
