@@ -9,6 +9,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 export interface MangaDexTitle {
   id: string;
   title: string;
+  verified: boolean;
+  category: string;
+  authors: string[];
+  coverUrl?: string;
 }
 
 export interface MangaDexChapter {
@@ -37,10 +41,10 @@ const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const str = (value: unknown): string => typeof value === "string" ? value : "";
 
 /** Find a MangaDex title by name; the user must confirm the match. */
-export async function searchMangaDex(title: string, signal?: AbortSignal): Promise<MangaDexTitle[]> {
+export async function searchMangaDex(title: string, anilistId: number, signal?: AbortSignal): Promise<MangaDexTitle[]> {
   const query = title.trim();
   if (query.length < 2) return [];
-  const params = new URLSearchParams({ title: query, limit: "10", "contentRating[]": "safe" });
+  const params = new URLSearchParams({ title: query, limit: "100", "contentRating[]": "safe" });
   const payload = object(await getJson(`${API}?${params}`, signal));
   return array(payload.data).flatMap((item) => {
     const row = object(item);
@@ -48,8 +52,15 @@ export async function searchMangaDex(title: string, signal?: AbortSignal): Promi
     const attrs = object(row.attributes);
     const titles = object(attrs.title);
     const display = str(titles.en) || Object.values(titles).find((v): v is string => typeof v === "string") || "";
-    return UUID.test(id) && display ? [{ id, title: display }] : [];
-  });
+    const verified = String(object(attrs.links).al || "") === String(anilistId);
+    const category = /doujinshi|fan.colou?red|fancomic|crossover| x | × /i.test(display) ? "Fan work / alternate edition" : /webcomic/i.test(display) ? "Original webcomic" : "Unverified edition";
+    const relations = array(row.relationships).map(object);
+    const authors = relations.filter((r) => r.type === "author" || r.type === "artist").map((r) => str(object(r.attributes).name)).filter(Boolean);
+    const cover = relations.find((r) => r.type === "cover_art");
+    const filename = str(object(cover ? cover.attributes : null).fileName);
+    const coverUrl = filename && UUID.test(id) ? `https://uploads.mangadex.org/covers/${id}/${encodeURIComponent(filename)}.256.jpg` : undefined;
+    return UUID.test(id) && display ? [{ id, title: display, verified, category: verified ? "Verified AniList match" : category, authors: [...new Set(authors)], coverUrl }] : [];
+  }).sort((a, b) => Number(b.verified) - Number(a.verified));
 }
 
 /** English chapters only for the first checkpoint, newest first, up to 100. */
