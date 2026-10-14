@@ -17,9 +17,9 @@ export function HomeView() {
   const view = useMemo(() => {
     if (!data) return null;
     return {
-      continueItems: getContinueReading(catalog, data),
+      continueItems: getContinueReading(catalog, data).filter((item) => !item.series.id.startsWith("demo-") && !item.series.id.startsWith("sample-")),
       newChapters: getNewChapters(catalog, data),
-      recent: getRecentlyAdded(catalog, data).slice(0, 10),
+      recent: getRecentlyAdded(catalog, data).filter((s) => s.id.startsWith("al-")).slice(0, 10),
     };
   }, [catalog, data]);
 
@@ -41,6 +41,10 @@ export function HomeView() {
     <>
       <PageHeader title="Home" subtitle="Pick up where you left off" />
 
+      <section className="section" aria-labelledby="my-library-h">
+        <SectionHeader id="my-library-h" title="My Manga" action={<Link href="/library" className="link">See all</Link>} />
+        {view.recent.length ? <div className="shelf" role="list">{view.recent.map((s) => <div role="listitem" key={s.id} className="shelf__item"><SeriesCard series={s} caption="Saved to library" /></div>)}</div> : <EmptyState title="No manga saved yet" body="Find a title in Discover and tap Add." action={{ href: "/discover", label: "Discover manga" }} />}
+      </section>
       <section aria-labelledby="continue-h" className="section">
         <SectionHeader id="continue-h" title="Continue Reading" />
         {hero ? (
