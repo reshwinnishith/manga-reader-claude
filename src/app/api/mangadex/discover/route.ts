@@ -16,7 +16,9 @@ export async function GET(request: NextRequest) {
   } else if (id && MANGADEX_ID.test(id)) {
     url.pathname = `/manga/${id}/feed`;
     url.searchParams.set("limit", "100");
-    url.searchParams.set("offset", "0");
+    const offset = Number(params.get("offset") ?? "0");
+    if (!Number.isInteger(offset) || offset < 0 || offset > 10000 || offset % 100 !== 0) return NextResponse.json({ error: "Invalid offset" }, { status: 400 });
+    url.searchParams.set("offset", String(offset));
     url.searchParams.set("translatedLanguage[]", "en");
     url.searchParams.set("order[chapter]", "desc");
     url.searchParams.set("includes[]", "scanlation_group");
