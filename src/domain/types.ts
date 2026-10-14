@@ -62,6 +62,8 @@ export interface SavedTitle {
   id: string;
   source: "anilist";
   externalId: number;
+  /** MyAnimeList ID reported by AniList; a second exact identity for sources. */
+  malId?: number;
   title: string;
   type: SeriesType;
   description: string;

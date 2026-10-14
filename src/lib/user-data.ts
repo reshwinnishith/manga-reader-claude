@@ -157,6 +157,7 @@ function parseSavedTitle(id: string, value: unknown): SavedTitle | null {
     id,
     source: "anilist",
     externalId: value.externalId,
+    malId: typeof value.malId === "number" && Number.isSafeInteger(value.malId) && value.malId > 0 ? value.malId : undefined,
     title: value.title,
     type: typeof value.type === "string" && SERIES_TYPES.has(value.type) ? (value.type as SavedTitle["type"]) : "manga",
     description: typeof value.description === "string" ? value.description : "",

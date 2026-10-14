@@ -58,6 +58,7 @@ const SEARCH_QUERY = /* GraphQL */ `
         sort: SEARCH_MATCH
       ) {
         id
+        idMal
         title {
           romaji
           english
@@ -171,6 +172,7 @@ export function typeFromCountry(country: string | null | undefined): SeriesType 
 
 interface RawMedia {
   id?: unknown;
+  idMal?: unknown;
   title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
   synonyms?: unknown;
   description?: string | null;
@@ -206,6 +208,7 @@ export function normalizeMedia(raw: unknown, fetchedAt: string): SavedTitle | nu
     id: `al-${id}`,
     source: "anilist",
     externalId: id,
+    malId: typeof m.idMal === "number" && Number.isSafeInteger(m.idMal) && m.idMal > 0 ? m.idMal : undefined,
     title,
     type: typeFromCountry(m.countryOfOrigin),
     description: cleanDescription(m.description),
