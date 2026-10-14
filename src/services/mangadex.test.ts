@@ -22,6 +22,15 @@ describe("source discovery", () => {
     expect(officialDestinations({ externalId: 85364 })).toEqual([]);
     expect(officialDestinations({ externalId: 1 })).toEqual([]);
   });
+  it("shows the verified Tapas reader only for the matching manhwa, not a novel or unrelated title", () => {
+    const series = { externalId: 999999, title: "The Legendary Hero is an Academy Honors Student", type: "manhwa" as const };
+    const links = officialDestinations(series);
+    expect(links).toHaveLength(1);
+    expect(links[0]?.url).toBe("https://tapas.io/series/the-legendary-hero-is-an-academy-honors-student/info");
+    expect(links[0]?.note).toMatch(/unlocking/);
+    expect(officialDestinations({ ...series, type: "manga" })).toEqual([]);
+    expect(officialDestinations({ ...series, title: "Another Academy Hero" })).toEqual([]);
+  });
   it("tries alternate titles but rejects ambiguous exact-ID results", async () => {
     const title = normalizeMedia({ id: 74347, title: { english: "One-Punch Man", romaji: "One Punch-Man" } }, "now")!;
     const fetcher = vi.fn().mockResolvedValueOnce(json({ data: [] })).mockResolvedValueOnce(json({ data: [1, 2].map((id) => ({ id: uuid(id), attributes: { title: { en: "One Punch-Man" }, links: { al: "74347" } } })) }));
