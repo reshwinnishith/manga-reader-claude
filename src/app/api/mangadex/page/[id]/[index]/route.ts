@@ -8,7 +8,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const filename = manifest.files[Number(index)];
     if (!filename) return new Response("Page not found", { status: 404 });
     const url = `${manifest.baseUrl}/data-saver/${manifest.hash}/${filename}`;
-    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(12000) });
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(12000), redirect: "error" });
     if (!response.ok) return new Response("Image unavailable", { status: 502 });
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.startsWith("image/")) return new Response("Invalid image", { status: 502 });

@@ -8,7 +8,6 @@ import { seriesFromSaved } from "@/lib/series-from-saved";
 import { ANILIST_SITE, MIN_QUERY_LENGTH, getAniListClient, type AniListClient, type CountryFilter } from "@/services/anilist";
 import { useCatalog } from "@/state/catalog-context";
 import { useTitleSearch } from "@/state/use-title-search";
-import { useUserData } from "@/state/use-user-data";
 import { AddToLibraryButton, SaveTitleButton } from "./add-button";
 import { Cover } from "./cover";
 import { DiscoverIcon } from "./icons";
@@ -71,7 +70,7 @@ export function DiscoverView({ client }: { client?: AniListClient }) {
         <a href={ANILIST_SITE} target="_blank" rel="noopener noreferrer">
           AniList
         </a>
-        . Title info only; reading isn&apos;t available yet. Adult-rated titles are hidden.
+        . Open a title to check verified chapters and official readers. Adult-rated titles are hidden.
       </p>
 
       <div aria-live="polite" className="sr-only">
@@ -171,9 +170,7 @@ export function DiscoverView({ client }: { client?: AniListClient }) {
 }
 
 function ResultCard({ title: t }: { title: SavedTitle }) {
-  const { data } = useUserData();
   const series = seriesFromSaved(t);
-  const saved = !!data?.library[t.id];
   const meta = [t.authors[0], t.year].filter(Boolean).join(" · ");
   const details = [STATUS_LABEL[t.status], t.reportedChapters ? `${t.reportedChapters} chapters` : null].filter(Boolean).join(" · ");
 

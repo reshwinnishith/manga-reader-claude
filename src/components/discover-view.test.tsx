@@ -23,8 +23,8 @@ function fakeClient(impl: AniListClient["search"] = async () => result()) {
   return { client: { search } as AniListClient, search };
 }
 
-beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
-afterEach(() => vi.useRealTimers());
+beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [], total: 0 }), { headers: { "content-type": "application/json" } }))); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS + 50); });
 const type = async (text: string) => {
@@ -244,11 +244,10 @@ describe("Library and series pages with saved titles", () => {
     expect(screen.getByRole("heading", { name: "Moonlit Pharmacy (Fixture)" })).toBeInTheDocument();
     expect(screen.getByText("Yuna Ashida · 2022")).toBeInTheDocument();
     expect(screen.getByText("42 chapters listed")).toBeInTheDocument();
-    expect(screen.getByText(/Chapters and reading aren.t available yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Metadata: AniList/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View on AniList" })).toHaveAttribute("href", "https://anilist.co/manga/101");
     expect(screen.getByRole("group", { name: "Reading status" })).toBeInTheDocument();
-    expect(screen.getByText("No chapters yet")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.queryByRole("heading", { name: "Chapters" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chapters" })).toBeInTheDocument();
   });
 
   it("lets you change the status of a saved title", async () => {
@@ -257,9 +256,9 @@ describe("Library and series pages with saved titles", () => {
     expect(store.getSnapshot()!.library["al-101"]?.status).toBe("dropped");
   });
 
-  it("explains when a saved title isn't on this device", () => {
+  it("explains when an unsaved title cannot be fetched", async () => {
     renderWithApp(<ExternalSeriesView id="al-999" />, emptyUserData());
-    expect(screen.getByText("This title isn't saved on this device")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Search titles" })).toHaveAttribute("href", "/discover");
+    expect(await screen.findByText("Couldn't load this title")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Discover" })).toHaveAttribute("href", "/discover");
   });
 });

@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
+import { readerUrl } from "@/services/reading-sources";
+import { isInactiveStatus } from "@/lib/user-data";
 import { formatChapterNumber, formatDate, pluralize } from "@/lib/format";
 import { getContinueReading, getNewChapters, getRecentlyAdded } from "@/lib/selectors";
 import { useAllSeries } from "@/state/use-all-series";
@@ -17,6 +19,7 @@ export function HomeView() {
   const view = useMemo(() => {
     if (!data) return null;
     return {
+      externalContinue: Object.values(data.savedTitles).filter((s) => data.library[s.id] && !isInactiveStatus(data.library[s.id]!.status) && data.progress[s.id]?.chapters[data.progress[s.id]!.lastChapterId]).sort((a, b) => data.progress[b.id]!.updatedAt.localeCompare(data.progress[a.id]!.updatedAt)),
       continueItems: getContinueReading(catalog, data).filter((item) => !item.series.id.startsWith("demo-") && !item.series.id.startsWith("sample-")),
       newChapters: getNewChapters(catalog, data),
       recent: getRecentlyAdded(catalog, data).filter((s) => s.id.startsWith("al-")).slice(0, 10),
@@ -47,6 +50,11 @@ export function HomeView() {
       </section>
       <section aria-labelledby="continue-h" className="section">
         <SectionHeader id="continue-h" title="Continue Reading" />
+        {view.externalContinue.map((title) => {
+          const progress = data!.progress[title.id]!;
+          const cp = progress.chapters[progress.lastChapterId]!;
+          return <Link className="row" key={title.id} aria-label={`${title.title} · ${cp.atEnd ? "Choose next chapter" : `Resume page ${cp.page + 1} of ${cp.pageCount}`}`} href={cp.atEnd ? `/series/${title.id}` : readerUrl({ id: progress.lastChapterId, number: "" }, title.id)}><span className="row__body"><span className="row__title">{title.title}</span><span className="row__meta">{cp.atEnd ? "Chapter finished · Choose next chapter" : `Resume page ${cp.page + 1} of ${cp.pageCount}`}</span></span><PlayIcon width={24} height={24} /></Link>;
+        })}
         {hero ? (
           <Link
             href={`/read/${hero.series.id}/${hero.target.chapter.id}`}
@@ -57,7 +65,7 @@ export function HomeView() {
             <div className="hero__body">
               <span className="hero__title">{hero.series.title}</span>
               <span className="hero__meta">
-                {formatChapterNumber(hero.target.chapter.number)} · Page {hero.target.page + 1} of {hero.target.chapter.pageCount}
+                {!hero.series.source ? "Demo · " : ""}{formatChapterNumber(hero.target.chapter.number)} · Page {hero.target.page + 1} of {hero.target.chapter.pageCount}
               </span>
               <ProgressBar value={hero.fraction} label={`${hero.series.title} progress`} />
               <span className="btn btn--primary hero__cta" aria-hidden="true">
@@ -65,13 +73,13 @@ export function HomeView() {
               </span>
             </div>
           </Link>
-        ) : (
+        ) : view.externalContinue.length === 0 ? (
           <EmptyState
             title="Nothing in progress"
             body="Find a series you like and start reading. It will show up here."
             action={{ href: "/discover", label: "Discover series" }}
           />
-        )}
+        ) : null}
 
         {rest.length > 0 && (
           <div className="shelf" role="list" aria-label="More in progress">
@@ -100,7 +108,7 @@ export function HomeView() {
                   <div className="row__body">
                     <span className="row__title">{series.title}</span>
                     <span className="row__meta">
-                      {formatChapterNumber(latest.number)} · {formatDate(latest.releasedAt)}
+                      {!series.source ? "Demo · " : ""}{formatChapterNumber(latest.number)} · {formatDate(latest.releasedAt)}
                     </span>
                   </div>
                   <span className="pill" aria-label={`${pluralize(chapters.length, "new chapter")}`}>

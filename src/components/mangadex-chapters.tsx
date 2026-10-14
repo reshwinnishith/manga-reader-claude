@@ -3,50 +3,44 @@
 import Link from "next/link";
 import { useUserData } from "@/state/use-user-data";
 import { useEffect, useState } from "react";
-import { listMangaDexChapters, searchMangaDex, type MangaDexChapter } from "@/services/mangadex";
+import type { SavedTitle } from "@/domain/types";
+import { chapterSequence, discoverReadingSources, officialDestinations, sourceChapterUrl, type SourceEdition } from "@/services/reading-sources";
 
-/** Only automatically matched AniList editions can provide in-app chapters. */
-export function MangaDexChapters({ title, anilistId }: { title: string; anilistId: number }) {
+export function MangaDexChapters({ title }: { title: SavedTitle }) {
+  return <ChapterSources key={`${title.id}:${title.fetchedAt}`} title={title} />;
+}
+
+function ChapterSources({ title }: { title: SavedTitle }) {
   const { data } = useUserData();
-  const [chapters, setChapters] = useState<MangaDexChapter[]>([]);
+  const [editions, setEditions] = useState<SourceEdition[]>([]);
   const [loading, setLoading] = useState(true);
-  const [found, setFound] = useState(false);
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    setChapters([]); setLoading(true); setFound(false); setError("");
-    (async () => {
-      const matches = await searchMangaDex(title, anilistId, controller.signal);
-      const match = matches.find((item) => item.verified);
-      if (!match) return;
-      setFound(true);
-      const result = await listMangaDexChapters(match.id, controller.signal);
-      const seen = new Set<string>();
-      const unique = result.filter((chapter) => {
-        if (!/^\d+(?:\.\d+)?$/.test(chapter.number)) return false;
-        if (seen.has(chapter.number)) return false;
-        seen.add(chapter.number);
-        return true;
-      }).sort((a, b) => Number(a.number) - Number(b.number));
-      if (!controller.signal.aborted) setChapters(unique);
-    })().catch((err: unknown) => {
+    discoverReadingSources(title, controller.signal).then((result) => {
+      if (!controller.signal.aborted) setEditions(result);
+    }).catch((err: unknown) => {
       if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load chapters.");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [title, anilistId]);
+  }, [title, attempt]);
+  const progress = data?.progress[title.id];
+  const chapters = editions.flatMap((e) => chapterSequence(e, Object.keys(progress?.chapters || {})).map((chapter) => ({ ...chapter, providerId: e.providerId })));
+  const official = officialDestinations(title);
   return <section className="section" aria-labelledby="real-chapters-h">
     <h2 id="real-chapters-h">Chapters</h2>
+    {official.map((destination) => <div className="notice" key={destination.url}><a className="link" href={destination.url} target="_blank" rel="noopener noreferrer">{destination.label} ↗</a><p>{destination.note}</p></div>)}
     {loading && <p role="status">Looking for the correct edition…</p>}
-    {error && <p role="alert" className="notice">{error}</p>}
-    {!loading && !error && !found && <p className="notice">Chapters for this edition aren't available from our current reader source. We won't substitute a different manga or fan work.</p>}
-    {!loading && found && chapters.length === 0 && <p className="muted">No readable English chapters found for this edition.</p>}
-    {chapters.length > 0 && <><p className="muted">Verified edition on MangaDex · {chapters.length} English chapters found</p>
-      <ul className="chapters">{chapters.map((chapter, index) => <li key={chapter.id}>
-        <Link className="chapter" href={`/mangadex/read/${chapter.id}?group=${encodeURIComponent(chapter.groupNames.join(", ") || "MangaDex")}&series=${encodeURIComponent(`al-${anilistId}`)}&chapter=${encodeURIComponent(chapter.number)}${index > 0 ? `&prev=${chapters[index - 1]!.id}&prevNumber=${encodeURIComponent(chapters[index - 1]!.number)}` : ""}${index < chapters.length - 1 ? `&next=${chapters[index + 1]!.id}&nextNumber=${encodeURIComponent(chapters[index + 1]!.number)}` : ""}`}>
-          <span className="chapter__num">{chapter.number}</span>
-          <span className="chapter__body"><span className="chapter__title">{chapter.title || `Chapter ${chapter.number}`}</span><span className="chapter__meta">{data?.progress[`al-${anilistId}`]?.chapters[chapter.id] ? `Resume page ${data.progress[`al-${anilistId}`]!.chapters[chapter.id]!.page + 1} · ` : ""}Read in MangaReader · {chapter.groupNames.join(", ") || "MangaDex"}</span></span>
-        </Link>
-      </li>)}</ul>
+    {error && <div role="alert" className="notice">{error} <button className="btn btn--secondary" onClick={() => { setLoading(true); setError(""); setAttempt((n) => n + 1); }}>Retry chapters</button></div>}
+    {!loading && !error && !editions.length && <p className="notice">No verified in-app chapter source for this edition.{official.length ? " Use the official reader above." : " We will not substitute a different edition."}</p>}
+    {!loading && editions.length > 0 && !chapters.length && <p className="muted">Edition verified. No available English chapters on MangaDex.{official.length ? " Use the official reader above." : ""}</p>}
+    {chapters.length > 0 && <><p className="muted">Verified edition on MangaDex · {chapters.filter((c) => c.readable).length} readable English releases · Specials are listed separately.</p>
+      <ul className="chapters">{chapters.map((chapter) => {
+        const saved = progress?.chapters[chapter.id];
+        const body = <><span className="chapter__num">{chapter.number || "Special"}</span><span className="chapter__body"><span className="chapter__title">{chapter.title || (chapter.number ? `Chapter ${chapter.number}` : "Special")}</span><span className="chapter__meta">{chapter.volume ? `Vol. ${chapter.volume} · ` : ""}{saved ? saved.completed ? "Read · " : `Resume page ${saved.page + 1} · ` : ""}{chapter.readable ? "Read in MangaReader" : chapter.externalUrl ? "Read at source ↗" : "Pages unavailable"} · {chapter.groupNames.join(", ") || "Group not credited"}</span></span></>;
+        return <li key={chapter.id}>{chapter.readable ? <Link className="chapter" href={sourceChapterUrl(chapter.providerId, chapter, title.id)}>{body}</Link> : chapter.externalUrl ? <a className="chapter" href={chapter.externalUrl} target="_blank" rel="noopener noreferrer">{body}</a> : <div className="chapter" aria-disabled="true">{body}</div>}</li>;
+      })}</ul>
     </>}
   </section>;
 }

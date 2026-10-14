@@ -49,6 +49,7 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
         <div className="series-head__cover"><Cover series={series} /></div>
         <div className="series-head__info">
           <h1 className="series-title">{series.title}</h1>
+          {!series.source && <p className="notice">Demo title · Illustrated placeholder pages</p>}
           <p className="muted">{[series.author, series.year || null].filter(Boolean).join(" · ")}</p>
           <div className="meta-row">
             <TypeBadge type={series.type} />
@@ -77,7 +78,7 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
         {savedTitle ? <SaveTitleButton title={savedTitle} /> : <AddToLibraryButton seriesId={series.id} title={series.title} />}
       </div>
 
-      {data && progress && (
+      {data && progress && !series.source && (
         <div className="progress-block">
           <div className="progress-block__row">
             <span>{Math.round(fraction * 100)}% complete</span>
@@ -109,15 +110,15 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
 
       <section className="section">
         <p className={`desc ${expanded ? "" : "desc--clamped"}`}>{series.description}</p>
-        <button type="button" className="link" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+        {series.description !== "No description available." && <button type="button" className="link" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
           {expanded ? "Show less" : "Read more"}
-        </button>
+        </button>}
       </section>
 
       {series.source && (
         <section className="section" aria-label="About this listing">
           <p className="notice">
-            Title details come from AniList. Chapters appear below only when the correct edition can be verified.
+            Metadata: AniList.
             {series.externalUrl && (
               <>
                 {" "}

@@ -1,11 +1,13 @@
 import { emptyUserData } from "@/lib/user-data";
 import type { ReaderMode, ReadingStatus, SavedTitle, Series, UserData } from "@/domain/types";
-import { createLocalStorageAdapter, type PersistenceAdapter } from "@/services/persistence";
+import { createLocalStorageAdapter, type PersistenceAdapter, type StorageRecovery } from "@/services/persistence";
 import * as ops from "@/lib/user-data";
 
 export interface UserDataStore {
   /** Current data, or null on the server / before first client load. */
   getSnapshot(): UserData | null;
+  getPersistenceWarning(): string | undefined;
+  getPersistenceRecovery(): StorageRecovery | undefined;
   getServerSnapshot(): null;
   subscribe(listener: () => void): () => void;
   addToLibrary(seriesId: string, status?: ReadingStatus): void;
@@ -60,6 +62,8 @@ export function createUserDataStore({
   };
 
   return {
+    getPersistenceWarning: () => adapter.getWarning?.(),
+    getPersistenceRecovery: () => adapter.getRecovery?.(),
     getSnapshot() {
       if (typeof window === "undefined") return null;
       if (state === null) state = load();

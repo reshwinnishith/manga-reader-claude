@@ -68,6 +68,7 @@ export interface SavedTitle {
   coverUrl?: string;
   genres: string[];
   authors: string[];
+  alternateTitles?: string[];
   year?: number;
   status: PublicationStatus;
   reportedChapters?: number;

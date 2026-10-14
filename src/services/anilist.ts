@@ -61,7 +61,9 @@ const SEARCH_QUERY = /* GraphQL */ `
         title {
           romaji
           english
+          native
         }
+        synonyms
         description(asHtml: false)
         coverImage {
           large
@@ -75,7 +77,7 @@ const SEARCH_QUERY = /* GraphQL */ `
         }
         countryOfOrigin
         siteUrl
-        staff(perPage: 3, sort: RELEVANCE) {
+        staff(perPage: 10, sort: RELEVANCE) {
           edges {
             role
             node {
@@ -169,7 +171,8 @@ export function typeFromCountry(country: string | null | undefined): SeriesType 
 
 interface RawMedia {
   id?: unknown;
-  title?: { romaji?: string | null; english?: string | null } | null;
+  title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
+  synonyms?: unknown;
   description?: string | null;
   coverImage?: { large?: string | null } | null;
   status?: string | null;
@@ -194,7 +197,8 @@ export function normalizeMedia(raw: unknown, fetchedAt: string): SavedTitle | nu
   const authors: string[] = [];
   for (const edge of m.staff?.edges ?? []) {
     const name = edge?.node?.name?.full?.trim();
-    if (name && !authors.includes(name)) authors.push(name);
+    const role = edge?.role || "";
+    if (name && (!role || /story|art|original|creator/i.test(role)) && !/assistant/i.test(role) && !authors.includes(name)) authors.push(name);
   }
 
   const id = m.id;
@@ -208,6 +212,7 @@ export function normalizeMedia(raw: unknown, fetchedAt: string): SavedTitle | nu
     coverUrl: isHttps(m.coverImage?.large) ? m.coverImage!.large! : undefined,
     genres: Array.isArray(m.genres) ? m.genres.filter((g): g is string => typeof g === "string").slice(0, 6) : [],
     authors: authors.slice(0, 3),
+    alternateTitles: [...new Set([m.title?.romaji, m.title?.native, ...(Array.isArray(m.synonyms) ? m.synonyms : [])].filter((t): t is string => typeof t === "string" && t.length > 1))].slice(0, 8),
     year: typeof m.startDate?.year === "number" ? m.startDate.year : undefined,
     status: STATUS[m.status ?? ""] ?? "ongoing",
     reportedChapters: typeof m.chapters === "number" && m.chapters > 0 ? m.chapters : undefined,

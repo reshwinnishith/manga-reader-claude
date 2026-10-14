@@ -371,3 +371,20 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 .load-more { display: flex; justify-content: center; margin-top: 16px; }
 .notice { padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 14px; }
 .section-note { margin-top: 20px; }
+
+/* Source reader: safe areas, stable placeholders and controls usable on iPhone. */
+.source-reader { min-height: 100dvh; background: #101015; color: #fff; padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); overflow-wrap: anywhere; }
+.source-reader a { color: inherit; }
+.source-reader__header, .source-reader__toolbar, .source-reader__controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; flex-wrap: wrap; }
+.source-reader__header a, .source-reader button, .source-reader__controls a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+.source-reader__pages { max-width: 850px; margin-inline: auto; }
+.source-reader__credit, .source-reader footer, .source-reader__end { text-align: center; padding-block: 16px; font-size: 14px; }
+.source-page { position: relative; width: 100%; }
+.source-page--loading, .source-page--error { min-height: 75dvh; background: #202027; }
+.source-page img { display: block; width: 100%; height: auto; }
+.source-page--loading img, .source-page--error img { visibility: hidden; }
+.source-page__status { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 16px; }
+.source-reader__pages--paged .source-page img { max-height: 78dvh; object-fit: contain; }
+.source-reader__pages--paged .source-page { min-height: 78dvh; }
+.source-reader button:disabled { opacity: .5; }
+.source-reader button:focus-visible, .source-reader a:focus-visible { outline: 3px solid #a6b7ff; outline-offset: 3px; }

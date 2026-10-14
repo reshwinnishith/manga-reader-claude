@@ -8,14 +8,14 @@ export async function chapterManifest(id: string): Promise<Manifest> {
   if (!MANGADEX_ID.test(id)) throw new Error("Invalid chapter ID");
   const cached = cache.get(id);
   if (cached && Date.now() - cached.fetched < 10 * 60_000) return cached;
-  const response = await fetch(`${API}/at-home/server/${id}?forcePort443=true`, { cache: "no-store" });
+  const response = await fetch(`${API}/at-home/server/${id}?forcePort443=true`, { cache: "no-store", signal: AbortSignal.timeout(12000), redirect: "error" });
   if (!response.ok) throw new Error(response.status === 429 ? "MangaDex is busy. Try again later." : "Could not load chapter pages.");
   const raw: unknown = await response.json();
   if (!raw || typeof raw !== "object") throw new Error("Invalid MangaDex response");
   const data = raw as { baseUrl?: unknown; chapter?: { hash?: unknown; dataSaver?: unknown } };
   if (typeof data.baseUrl !== "string" || typeof data.chapter?.hash !== "string" || !Array.isArray(data.chapter.dataSaver)) throw new Error("Invalid page information");
   const url = new URL(data.baseUrl);
-  if (url.protocol !== "https:" || !url.hostname.endsWith(".mangadex.network")) throw new Error("Untrusted image server");
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !url.hostname.endsWith(".mangadex.network")) throw new Error("Untrusted image server");
   const files = data.chapter.dataSaver.filter((f): f is string => typeof f === "string" && /^[a-zA-Z0-9_.-]+$/.test(f));
   if (!files.length || files.length !== data.chapter.dataSaver.length || !/^[a-zA-Z0-9]+$/.test(data.chapter.hash)) throw new Error("Invalid page list");
   const manifest = { baseUrl: data.baseUrl.replace(/\/$/, ""), hash: data.chapter.hash, files, fetched: Date.now() };
