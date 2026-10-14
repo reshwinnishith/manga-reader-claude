@@ -19,7 +19,7 @@ it("rejects invalid offsets without an upstream request", async () => {
   expect(fetcher).not.toHaveBeenCalled();
 });
 it("gets chapter identity and credits from the source, including a chapter zero", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json({ data: { id, attributes: { chapter: "0" }, relationships: [{ type: "manga", id: mangaId }, { type: "scanlation_group", attributes: { name: "Real team" } }] } })).mockResolvedValueOnce(json({ data: { id: mangaId, attributes: { title: { en: "One-Punch Man" }, links: { al: "74347" } } } })));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json({ data: { id, attributes: { chapter: "0", pages: 12, translatedLanguage: "en" }, relationships: [{ type: "manga", id: mangaId }, { type: "scanlation_group", attributes: { name: "Real team" } }] } })).mockResolvedValueOnce(json({ data: { id: mangaId, attributes: { title: { en: "One-Punch Man" }, links: { al: "74347" } } } })));
   expect(await chapterIdentity(id)).toMatchObject({ seriesId: "al-74347", number: "0", group: "Real team", mangaId });
 });
 it("rejects external-only chapters before attempting a page manifest", async () => {
@@ -29,5 +29,5 @@ it("rejects external-only chapters before attempting a page manifest", async () 
   fetcher.mockResolvedValueOnce(json({ data: { id, attributes: { externalUrl: "https://publisher.example/chapter" }, relationships: [{ type: "manga", id: mangaId }] } }))
     .mockResolvedValueOnce(json({ data: { id: mangaId, attributes: { title: { en: "Example" }, links: { al: "74347" } } } }));
   await expect(chapterIdentity(id)).rejects.toThrow("only available at its source");
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });
