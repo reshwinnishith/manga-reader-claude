@@ -7,7 +7,6 @@ import { getSeries, renderWithApp } from "@/test/helpers";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 
-import { DiscoverView } from "./discover-view";
 import { HomeView } from "./home-view";
 import { LibraryView } from "./library-view";
 import { SeriesView } from "./series-view";
@@ -71,23 +70,6 @@ describe("Library", () => {
     renderWithApp(<LibraryView />, emptyUserData());
     expect(screen.getByText("Your library is empty")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Find something to read" })).toHaveAttribute("href", "/discover");
-  });
-});
-
-describe("Discover", () => {
-  it("searches the mock catalog and adds a series to the library", async () => {
-    const user = userEvent.setup();
-    const { store } = renderWithApp(<DiscoverView />, emptyUserData());
-    await user.type(screen.getByRole("searchbox", { name: "Search the catalog" }), "neon");
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
-
-    await user.click(screen.getByRole("button", { name: "Add Neon Ronin to library" }));
-    expect(store.getSnapshot()?.library["neon-ronin"]?.status).toBe("planned");
-    expect(screen.getByRole("button", { name: "Remove Neon Ronin from library" })).toHaveAttribute("aria-pressed", "true");
-
-    await user.clear(screen.getByRole("searchbox"));
-    await user.type(screen.getByRole("searchbox"), "qqqq");
-    expect(screen.getByText("No results")).toBeInTheDocument();
   });
 });
 

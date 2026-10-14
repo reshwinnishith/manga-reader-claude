@@ -1,9 +1,37 @@
-import { useId } from "react";
+"use client";
+
+import { useId, useState } from "react";
 import type { Series } from "@/domain/types";
 import { createRng, hashString } from "@/lib/placeholder";
 
-/** Generated placeholder cover (2:3). Decorative: the title is rendered by the caller. */
-export function Cover({ series, className }: { series: Pick<Series, "id" | "title" | "hue" | "type">; className?: string }) {
+type CoverSeries = Pick<Series, "id" | "title" | "hue" | "type"> & { coverUrl?: string };
+
+/**
+ * Cover art (2:3). Titles from search show their remote cover; everything else
+ * (and any cover that fails to load) uses generated placeholder art.
+ * Decorative: the title is rendered by the caller.
+ */
+export function Cover({ series, className }: { series: CoverSeries; className?: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (series.coverUrl && failedUrl !== series.coverUrl) {
+    return (
+      // Plain <img>: the image is served straight from the source's CDN, not re-hosted or proxied.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className={`cover-img ${className ?? ""}`}
+        src={series.coverUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => setFailedUrl(series.coverUrl ?? null)}
+      />
+    );
+  }
+  return <GeneratedCover series={series} className={className} />;
+}
+
+function GeneratedCover({ series, className }: { series: CoverSeries; className?: string }) {
   const uid = useId().replace(/:/g, "");
   const rng = createRng(hashString(series.id));
   const h2 = (series.hue + 40 + Math.round(rng() * 30)) % 360;

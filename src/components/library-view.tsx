@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { READING_STATUSES, type ReadingStatus } from "@/domain/types";
 import { formatChapterNumber } from "@/lib/format";
 import { filterLibrary, getResumeTarget, getSeriesProgressFraction, type LibraryFilter } from "@/lib/selectors";
-import { useCatalog } from "@/state/catalog-context";
+import { useAllSeries } from "@/state/use-all-series";
 import { useUserData } from "@/state/use-user-data";
 import { DiscoverIcon } from "./icons";
 import { EmptyState, GridSkeleton, PageHeader, SeriesCard } from "./ui";
@@ -16,7 +16,7 @@ const emptyCounts = (): Record<LibraryFilter, number> => ({
 });
 
 export function LibraryView() {
-  const { series: catalog } = useCatalog();
+  const catalog = useAllSeries();
   const { data } = useUserData();
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [query, setQuery] = useState("");

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SavedTitle } from "@/domain/types";
 import { getSeries } from "@/test/helpers";
 import { emptyUserData } from "@/lib/user-data";
 import { createLocalStorageAdapter, createMemoryAdapter, STORAGE_KEY } from "@/services/persistence";
@@ -9,6 +10,12 @@ const opts = (adapter = createLocalStorageAdapter()) => ({
   initial: emptyUserData,
   now: () => "2026-10-12T12:00:00.000Z",
 });
+
+const SAVED: SavedTitle = {
+  id: "al-101", source: "anilist", externalId: 101, title: "Moonlit Pharmacy (Fixture)", type: "manga", description: "d",
+  coverUrl: "https://example.test/c.jpg", genres: ["Mystery"], authors: ["A"], year: 2022, status: "ongoing",
+  reportedChapters: 42, url: "https://anilist.co/manga/101", fetchedAt: "2026-10-14T00:00:00.000Z",
+};
 
 describe("user data store", () => {
   const series = getSeries("neon-ronin");
@@ -86,13 +93,14 @@ describe("user data store", () => {
 
     const store = createUserDataStore(opts());
     const data = store.getSnapshot()!;
-    expect(data.version).toBe(2);
+    expect(data.version).toBe(3);
+    expect(data.savedTitles).toEqual({});
     expect(data.library["neon-ronin"]?.status).toBe("reading");
     expect(data.readerModes["neon-ronin"]).toBe("vertical");
     expect(data.progress["neon-ronin"]?.chapters["neon-ronin-c1"]).toMatchObject({ completed: true, atEnd: true });
 
     // Upgraded copy is persisted, original is backed up exactly once.
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).version).toBe(2);
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).version).toBe(3);
     expect(JSON.parse(window.localStorage.getItem(`${STORAGE_KEY}:backup-v1`)!)).toEqual(v1);
     createUserDataStore(opts()).getSnapshot(); // loading again must not overwrite the backup
     expect(JSON.parse(window.localStorage.getItem(`${STORAGE_KEY}:backup-v1`)!)).toEqual(v1);
@@ -119,5 +127,32 @@ describe("user data store", () => {
     expect(createUserDataStore(opts()).getSnapshot()?.library["neon-ronin"]?.status).toBe("on-hold");
     a.setReadingStatus("neon-ronin", "dropped");
     expect(createUserDataStore(opts()).getSnapshot()?.library["neon-ronin"]?.status).toBe("dropped");
+  });
+
+  it("migrates v2 data (before title search) without losing anything and adds empty savedTitles", () => {
+    const v2 = {
+      version: 2, seeded: true,
+      library: { "neon-ronin": { seriesId: "neon-ronin", status: "on-hold", addedAt: "2026-01-01T00:00:00.000Z" } },
+      progress: { "neon-ronin": { lastChapterId: "neon-ronin-c2", updatedAt: "2026-02-01T00:00:00.000Z", chapters: {
+        "neon-ronin-c2": { page: 4, pageCount: 19, atEnd: false, completed: true, updatedAt: "2026-02-01T00:00:00.000Z" } } } },
+      readerModes: { "neon-ronin": "vertical" },
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v2));
+    const data = createUserDataStore(opts()).getSnapshot()!;
+    expect(data.version).toBe(3);
+    expect(data.savedTitles).toEqual({});
+    expect(data.library["neon-ronin"]?.status).toBe("on-hold");
+    expect(data.progress["neon-ronin"]?.chapters["neon-ronin-c2"]).toMatchObject({ page: 4, completed: true });
+    expect(data.readerModes["neon-ronin"]).toBe("vertical");
+    expect(JSON.parse(window.localStorage.getItem(`${STORAGE_KEY}:backup-v2`)!)).toEqual(v2);
+  });
+
+  it("persists titles saved from search across reloads", () => {
+    const a = createUserDataStore(opts());
+    a.getSnapshot();
+    a.saveExternalTitle(SAVED);
+    const b = createUserDataStore(opts()).getSnapshot()!;
+    expect(b.savedTitles["al-101"]).toEqual(SAVED);
+    expect(b.library["al-101"]?.status).toBe("planned");
   });
 });

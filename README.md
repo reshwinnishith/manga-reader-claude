@@ -12,7 +12,7 @@ artwork (no copyrighted images). Reading progress and your library live in the b
 | --- | --- |
 | **Home** | Continue Reading hero (resumes at the exact chapter and page), more in progress, New Chapters, Recently Added |
 | **Library** | Cover grid, search, status filters (All / Reading / Planned / On Hold / Dropped / Completed), empty states |
-| **Discover** | Search + Manga/Manhwa filter over a mock catalog, one-tap add/remove from library |
+| **Discover** | Real title search via AniList (cover, title, description, genres, author, year, status), Manga/Manhwa/Manhua filter, one-tap save to the library. Demo titles show while the search box is empty |
 | **Series** | Cover, metadata, description, progress, Start/Continue button, chapter list with read/in-progress state, reading status |
 | **Reader** | Full-screen, tap to show/hide controls, page slider, previous/next chapter. **Vertical scroll** (manhwa default) and **paged right-to-left** (manga default). Mode is remembered per series. Progress is saved on every page change and the next chapter is one tap away |
 
@@ -40,9 +40,19 @@ The reader tracks one position per chapter, `index`: `0 … pageCount-1` are pag
 - **Caught up:** on the latest chapter the end card says so (or "The end" for a finished series) and offers Back to series; the series page shows "Caught up · Read again".
 - **Library status side effects:** reading moves Planned / On Hold / Dropped series back to Reading; finishing every chapter of a publication-complete series sets Completed; rereading a Completed series leaves it Completed. On Hold and Dropped series are kept off Home (Continue Reading, New Chapters, Recently Added) but stay in the Library.
 
+### Title search (Checkpoint 2A)
+
+Discover searches AniList's public GraphQL API (`services/anilist.ts`) straight from the browser. **Metadata only**: no chapters, page images, downloads, accounts or reading tracking.
+
+- **Saving:** a result is stored in `UserData.savedTitles` (a small snapshot: title, cover URL, cleaned description, genres, authors, year, status, link) and added to the library as *Planned*. Saved titles appear in Library and Home next to the demo series and open a detail page that says plainly that chapters aren't available yet. Existing library entries, progress and demo data are never modified; removing a title keeps its snapshot so re-adding is instant.
+- **Good-citizen limits:** typing is debounced (450 ms, one request per pause, earlier in-flight requests are cancelled); searches start at 2 letters; results are cached in memory for 10 minutes; a per-tab limiter allows 20 requests/minute (AniList's documented limit is 90, temporarily lower at times); a 429 response pauses all searching for the `Retry-After` period (60 s if the browser can't read the header); there are no automatic retries and nothing is prefetched.
+- **Content handling:** adult-flagged titles and novels are excluded in the query itself. Descriptions are converted to plain text (tags stripped, entities decoded, `~!spoiler!~` blocks removed) and only ever rendered as text. Remote cover images are loaded directly from AniList's CDN with `referrerPolicy="no-referrer"` and fall back to generated art if they fail.
+- **Attribution & terms:** Discover credits AniList and each result links to its AniList page. AniList's terms (checked via search results, not the live docs page) allow free non-commercial use and ask that the API not be used as a data store or for bulk collection. This app only stores titles the user explicitly saves. Re-read https://docs.anilist.co/guide/terms-of-use before any public or commercial use.
+- **Privacy:** searching and loading covers sends the query and the user's IP address to AniList.
+
 ### Stored data & migration
 
-User data is versioned (`UserData.version`, currently 2). `migrateUserData` upgrades older data on load, keeps everything (library, progress, modes, completion history), derives `atEnd` for v1 chapters, and falls back to "reading" for unknown statuses. The v1 original is copied once to `manga-reader:v1:backup-v1` before the upgraded copy is written. Add a step there when the shape changes again.
+User data is versioned (`UserData.version`, currently 3: v3 added `savedTitles`). `migrateUserData` upgrades older data on load, keeps everything (library, progress, modes, completion history), derives `atEnd` for v1 chapters, and falls back to "reading" for unknown statuses. The v1 original is copied once to `manga-reader:v1:backup-v1` before the upgraded copy is written. Add a step there when the shape changes again.
 
 ## Getting started
 
@@ -132,6 +142,7 @@ Key decisions:
 
 `npm test` runs Vitest with Testing Library (jsdom):
 
+- `services/anilist.test.ts`, `lib/clean-description.test.ts`, `components/discover-view.test.tsx`: request shape, normalising, caching, rate limiting, 429/offline/server/bad-response handling, the debounced search UI, saving to the library, saved-title pages (all against labelled fixtures, not the live API)
 - `lib/user-data.test.ts`, `lib/selectors.test.ts`, `lib/reader-position.test.ts`: library statuses, completion boundaries, idempotence, rereading, resume rules, v1→v2 migration, Home filtering, search
 - `state/user-data-store.test.ts`: localStorage persistence across "reloads", v1 migration + backup, corrupt data recovery, no reseeding, multi-tab updates, no-op writes
 - `components/app-nav.test.tsx`: navigation links and active state

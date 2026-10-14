@@ -3,8 +3,8 @@
  * stored in Firestore or fetched from a permitted source adapter unchanged.
  */
 
-export type SeriesType = "manga" | "manhwa";
-export type PublicationStatus = "ongoing" | "completed" | "hiatus";
+export type SeriesType = "manga" | "manhwa" | "manhua";
+export type PublicationStatus = "ongoing" | "completed" | "hiatus" | "cancelled" | "upcoming";
 export type ReaderMode = "vertical" | "paged-rtl";
 export type ReadingStatus = "reading" | "planned" | "on-hold" | "dropped" | "completed";
 
@@ -42,11 +42,43 @@ export interface Series {
   /** Drives the generated placeholder cover and pages (0-359). */
   hue: number;
   chapters: Chapter[];
+  /** Where the metadata came from. Absent = bundled demo catalog. */
+  source?: "anilist";
+  /** Remote cover image (title-search results). Falls back to generated art. */
+  coverUrl?: string;
+  /** Public page for the title at its source. */
+  externalUrl?: string;
+  /** Chapter count reported by the source (no chapters are fetched yet). */
+  reportedChapters?: number;
+}
+
+/**
+ * Snapshot of a title found through search, stored locally when the user saves
+ * it. Deliberately small: only what is needed to show the title in the library.
+ * It is plain data, so it can sync later alongside the rest of `UserData`.
+ */
+export interface SavedTitle {
+  /** Local series id, e.g. "al-30002" (source prefix + external id). */
+  id: string;
+  source: "anilist";
+  externalId: number;
+  title: string;
+  type: SeriesType;
+  description: string;
+  coverUrl?: string;
+  genres: string[];
+  authors: string[];
+  year?: number;
+  status: PublicationStatus;
+  reportedChapters?: number;
+  url: string;
+  /** ISO timestamp the metadata was fetched. */
+  fetchedAt: string;
 }
 
 /** What the reader should open by default for a series. */
 export const defaultReaderMode = (type: SeriesType): ReaderMode =>
-  type === "manhwa" ? "vertical" : "paged-rtl";
+  type === "manga" ? "paged-rtl" : "vertical"; // manhwa / manhua are webtoon-style
 
 // ---- User data (progress + library) ---------------------------------------
 
@@ -82,13 +114,15 @@ export interface SeriesProgress {
 }
 
 /** Bump when the persisted shape changes and add a step to `migrateUserData`. */
-export const USER_DATA_VERSION = 2;
+export const USER_DATA_VERSION = 3;
 
 export interface UserData {
   version: typeof USER_DATA_VERSION;
   library: Record<string, LibraryEntry>;
   progress: Record<string, SeriesProgress>;
   readerModes: Record<string, ReaderMode>;
+  /** Titles saved from search, keyed by local series id. Added in v3. */
+  savedTitles: Record<string, SavedTitle>;
   /** True once the demo library has been seeded (never reseed after). */
   seeded: boolean;
 }

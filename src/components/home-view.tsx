@@ -4,14 +4,14 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { formatChapterNumber, formatDate, pluralize } from "@/lib/format";
 import { getContinueReading, getNewChapters, getRecentlyAdded } from "@/lib/selectors";
-import { useCatalog } from "@/state/catalog-context";
+import { useAllSeries } from "@/state/use-all-series";
 import { useUserData } from "@/state/use-user-data";
 import { Cover } from "./cover";
 import { PlayIcon } from "./icons";
 import { BlockSkeleton, EmptyState, PageHeader, ProgressBar, SectionHeader, SeriesCard } from "./ui";
 
 export function HomeView() {
-  const { series: catalog } = useCatalog();
+  const catalog = useAllSeries();
   const { data } = useUserData();
 
   const view = useMemo(() => {

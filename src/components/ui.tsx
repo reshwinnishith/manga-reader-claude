@@ -74,8 +74,10 @@ export function ErrorState({ title, body, action }: { title: string; body: strin
   );
 }
 
+const TYPE_LABEL: Record<Series["type"], string> = { manga: "Manga", manhwa: "Manhwa", manhua: "Manhua" };
+
 export function TypeBadge({ type }: { type: Series["type"] }) {
-  return <span className={`badge badge--${type}`}>{type === "manga" ? "Manga" : "Manhwa"}</span>;
+  return <span className={`badge badge--${type}`}>{TYPE_LABEL[type]}</span>;
 }
 
 /** Cover + title card linking to the series page. */

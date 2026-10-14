@@ -1,5 +1,5 @@
 import { createDemoUserData } from "@/data/demo-user-data";
-import type { ReaderMode, ReadingStatus, Series, UserData } from "@/domain/types";
+import type { ReaderMode, ReadingStatus, SavedTitle, Series, UserData } from "@/domain/types";
 import { createLocalStorageAdapter, type PersistenceAdapter } from "@/services/persistence";
 import * as ops from "@/lib/user-data";
 
@@ -9,6 +9,8 @@ export interface UserDataStore {
   getServerSnapshot(): null;
   subscribe(listener: () => void): () => void;
   addToLibrary(seriesId: string, status?: ReadingStatus): void;
+  /** Save a search result (metadata snapshot) and add it to the library. */
+  saveExternalTitle(title: SavedTitle): void;
   removeFromLibrary(seriesId: string): void;
   setReadingStatus(seriesId: string, status: ReadingStatus): void;
   setReaderMode(seriesId: string, mode: ReaderMode): void;
@@ -80,6 +82,7 @@ export function createUserDataStore({
       };
     },
     addToLibrary: (id, status) => update((d) => ops.addToLibrary(d, id, now(), status)),
+    saveExternalTitle: (title) => update((d) => ops.saveExternalTitle(d, title, now())),
     removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
     setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),
     setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode)),

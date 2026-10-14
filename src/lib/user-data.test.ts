@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { USER_DATA_VERSION, type UserData } from "@/domain/types";
+import { USER_DATA_VERSION, type SavedTitle, type UserData } from "@/domain/types";
 import { getSeries } from "@/test/helpers";
 import {
-  addToLibrary, emptyUserData, migrateUserData, recordProgress, removeFromLibrary, setReaderMode, setReadingStatus,
+  addToLibrary, emptyUserData, migrateUserData, recordProgress, removeFromLibrary, saveExternalTitle, setReaderMode, setReadingStatus,
 } from "./user-data";
 
 const NOW = "2026-10-12T12:00:00.000Z";
@@ -212,5 +212,79 @@ describe("migrateUserData", () => {
     expect(migrateUserData("nope")).toBeNull();
     expect(migrateUserData({ version: 99, library: {}, progress: {}, readerModes: {} })).toBeNull();
     expect(migrateUserData({ version: 1 })).toBeNull();
+  });
+});
+
+const TITLE: SavedTitle = {
+  id: "al-101", source: "anilist", externalId: 101, title: "Moonlit Pharmacy (Fixture)", type: "manga", description: "d",
+  coverUrl: "https://example.test/c.jpg", genres: ["Mystery"], authors: ["A"], year: 2022, status: "ongoing",
+  reportedChapters: 42, url: "https://anilist.co/manga/101", fetchedAt: "2026-10-14T00:00:00.000Z",
+};
+
+describe("saveExternalTitle", () => {
+  it("stores the snapshot and adds the title to the library as planned", () => {
+    const d = saveExternalTitle(emptyUserData(), TITLE, NOW);
+    expect(d.savedTitles["al-101"]).toEqual(TITLE);
+    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "planned", addedAt: NOW });
+  });
+
+  it("leaves existing library entries, progress, demo data and other saved titles untouched", () => {
+    const series = getSeries("neon-ronin");
+    let d = recordProgress(emptyUserData(), series, series.chapters[0]!.id, 3, NOW);
+    d = setReadingStatus(d, series.id, "on-hold");
+    const other = { ...TITLE, id: "al-202", externalId: 202, title: "Other" };
+    d = saveExternalTitle(d, other, NOW);
+    const before = d;
+    d = saveExternalTitle(d, TITLE, LATER);
+    expect(d.library[series.id]).toEqual(before.library[series.id]);
+    expect(d.progress).toBe(before.progress);
+    expect(d.readerModes).toBe(before.readerModes);
+    expect(d.savedTitles["al-202"]).toEqual(other);
+  });
+
+  it("re-saving refreshes metadata but keeps status and addedAt", () => {
+    let d = saveExternalTitle(emptyUserData(), TITLE, NOW);
+    d = setReadingStatus(d, "al-101", "dropped");
+    d = saveExternalTitle(d, { ...TITLE, title: "Renamed" }, LATER);
+    expect(d.savedTitles["al-101"]?.title).toBe("Renamed");
+    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "dropped", addedAt: NOW });
+  });
+
+  it("keeps the metadata when the title is removed from the library (so re-adding and progress links never dangle)", () => {
+    let d = saveExternalTitle(emptyUserData(), TITLE, NOW);
+    d = removeFromLibrary(d, "al-101");
+    expect(d.library["al-101"]).toBeUndefined();
+    expect(d.savedTitles["al-101"]).toEqual(TITLE);
+    expect(addToLibrary(d, "al-101", LATER).library["al-101"]?.status).toBe("planned");
+  });
+});
+
+describe("migrateUserData · saved titles", () => {
+  const base = () => ({ version: 3, library: {}, progress: {}, readerModes: {}, seeded: true });
+
+  it("round-trips valid saved titles", () => {
+    const d = { ...base(), savedTitles: { "al-101": TITLE } };
+    expect(migrateUserData(d)?.savedTitles).toEqual({ "al-101": TITLE });
+  });
+
+  it("drops malformed snapshots and unsafe URLs but keeps good ones", () => {
+    const d = {
+      ...base(),
+      savedTitles: {
+        "al-101": TITLE,
+        "al-bad1": { title: "no id fields" },
+        "al-bad2": { ...TITLE, url: "javascript:alert(1)" },
+        "al-bad3": { ...TITLE, source: "other" },
+        "al-ok": { ...TITLE, coverUrl: "http://insecure/x.jpg", type: "nonsense", status: "weird", genres: "x" },
+      },
+    };
+    const m = migrateUserData(d)!;
+    expect(Object.keys(m.savedTitles).sort()).toEqual(["al-101", "al-ok"]);
+    expect(m.savedTitles["al-ok"]).toMatchObject({ coverUrl: undefined, type: "manga", status: "ongoing", genres: [] });
+  });
+
+  it("treats a missing or invalid savedTitles field as empty", () => {
+    expect(migrateUserData(base())?.savedTitles).toEqual({});
+    expect(migrateUserData({ ...base(), savedTitles: [1, 2] })?.savedTitles).toEqual({});
   });
 });

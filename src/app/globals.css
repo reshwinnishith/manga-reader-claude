@@ -160,6 +160,7 @@ svg { display: block; }
   background: var(--surface-3); color: var(--muted);
 }
 .badge--manga { background: rgba(255, 138, 101, 0.15); color: #ff9e80; }
+.badge--manhua { background: rgba(255, 213, 79, 0.14); color: #ffd54f; }
 .badge--manhwa { background: rgba(77, 208, 225, 0.14); color: #6fdbe8; }
 
 .pill { padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; flex: none; }
@@ -186,7 +187,8 @@ svg { display: block; }
   position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--surface-2);
 }
 .card__cover { border-radius: 12px; margin-bottom: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
-.card__cover svg, .hero__cover svg, .row__cover svg, .dcard__cover svg, .series-head__cover svg { width: 100%; height: 100%; }
+.card__cover svg, .hero__cover svg, .row__cover svg, .dcard__cover svg, .series-head__cover svg,
+.card__cover img, .hero__cover img, .row__cover img, .dcard__cover img, .series-head__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card:active .card__cover { transform: scale(0.98); }
 .card__title { font-weight: 650; font-size: 14px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card__caption { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -357,3 +359,15 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ---------- Title search (Discover) ---------- */
+.attribution { color: var(--muted); font-size: 12.5px; margin: 4px 0 14px; }
+.attribution a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; display: inline-block; padding: 15px 6px; margin: -15px -6px; } /* 44px tap area without moving the text */
+.dcard__links { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.dcard__source { position: relative; z-index: 1; color: var(--accent); font-size: 13px; font-weight: 600; min-height: 44px; display: inline-flex; align-items: center; }
+.dcard__desc--empty { font-style: italic; color: var(--muted); }
+.dcard--skeleton .dcard__cover { box-shadow: none; }
+.retry-note { color: var(--muted); font-size: 13px; }
+.load-more { display: flex; justify-content: center; margin-top: 16px; }
+.notice { padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 14px; }
+.section-note { margin-top: 20px; }

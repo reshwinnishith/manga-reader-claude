@@ -6,6 +6,7 @@ import {
   type LibraryEntry,
   type ReaderMode,
   type ReadingStatus,
+  type SavedTitle,
   type Series,
   type UserData,
 } from "@/domain/types";
@@ -20,6 +21,7 @@ export const emptyUserData = (): UserData => ({
   library: {},
   progress: {},
   readerModes: {},
+  savedTitles: {},
   seeded: false,
 });
 
@@ -32,6 +34,16 @@ export function addToLibrary(
   if (data.library[seriesId]) return data;
   const entry: LibraryEntry = { seriesId, status, addedAt: now };
   return { ...data, library: { ...data.library, [seriesId]: entry } };
+}
+
+/**
+ * Save a title found through search and put it in the library as "planned".
+ * Existing library entries (status, addedAt) and progress are never touched;
+ * the stored metadata snapshot is refreshed.
+ */
+export function saveExternalTitle(data: UserData, title: SavedTitle, now: string): UserData {
+  const withTitle: UserData = { ...data, savedTitles: { ...data.savedTitles, [title.id]: title } };
+  return addToLibrary(withTitle, title.id, now);
 }
 
 export function removeFromLibrary(data: UserData, seriesId: string): UserData {
@@ -132,10 +144,41 @@ export const isInactiveStatus = (status: ReadingStatus) => INACTIVE_STATUSES.inc
 const VALID_STATUSES = new Set<string>(READING_STATUSES.map((s) => s.value));
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
+const SERIES_TYPES = new Set(["manga", "manhwa", "manhua"]);
+const PUBLICATION_STATUSES = new Set(["ongoing", "completed", "hiatus", "cancelled", "upcoming"]);
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
+/** Defensive parse of a stored title snapshot; returns null if unusable. */
+function parseSavedTitle(id: string, value: unknown): SavedTitle | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.title !== "string" || typeof value.externalId !== "number" || value.source !== "anilist") return null;
+  if (typeof value.url !== "string" || !/^https:\/\//.test(value.url)) return null;
+  return {
+    id,
+    source: "anilist",
+    externalId: value.externalId,
+    title: value.title,
+    type: typeof value.type === "string" && SERIES_TYPES.has(value.type) ? (value.type as SavedTitle["type"]) : "manga",
+    description: typeof value.description === "string" ? value.description : "",
+    coverUrl: typeof value.coverUrl === "string" && /^https:\/\//.test(value.coverUrl) ? value.coverUrl : undefined,
+    genres: isStringArray(value.genres) ? value.genres : [],
+    authors: isStringArray(value.authors) ? value.authors : [],
+    year: typeof value.year === "number" ? value.year : undefined,
+    status:
+      typeof value.status === "string" && PUBLICATION_STATUSES.has(value.status)
+        ? (value.status as SavedTitle["status"])
+        : "ongoing",
+    reportedChapters: typeof value.reportedChapters === "number" ? value.reportedChapters : undefined,
+    url: value.url,
+    fetchedAt: typeof value.fetchedAt === "string" ? value.fetchedAt : new Date(0).toISOString(),
+  };
+}
+
 /**
  * Bring any previously persisted shape up to the current `UserData`, keeping
  * everything the user has recorded. Returns null for unrecognisable input.
  *
+ * - v2 -> v3: adds `savedTitles` (titles saved from search). Nothing else changes.
  * - v1 -> v2: chapters gain `atEnd`. In v1 a chapter was marked completed on
  *   merely reaching its final page, so a completed chapter parked on its final
  *   page is treated as at its end; completion history is preserved as-is.
@@ -145,7 +188,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 export function migrateUserData(raw: unknown): UserData | null {
   if (!isRecord(raw)) return null;
   const version = raw.version;
-  if (version !== 1 && version !== USER_DATA_VERSION) return null;
+  if (version !== 1 && version !== 2 && version !== USER_DATA_VERSION) return null;
   if (!isRecord(raw.library) || !isRecord(raw.progress) || !isRecord(raw.readerModes)) return null;
 
   const library: UserData["library"] = {};
@@ -188,5 +231,13 @@ export function migrateUserData(raw: unknown): UserData | null {
     if (mode === "vertical" || mode === "paged-rtl") readerModes[id] = mode;
   }
 
-  return { version: USER_DATA_VERSION, library, progress, readerModes, seeded: raw.seeded === true };
+  const savedTitles: UserData["savedTitles"] = {};
+  if (isRecord(raw.savedTitles)) {
+    for (const [id, value] of Object.entries(raw.savedTitles)) {
+      const title = parseSavedTitle(id, value);
+      if (title) savedTitles[id] = title;
+    }
+  }
+
+  return { version: USER_DATA_VERSION, library, progress, readerModes, savedTitles, seeded: raw.seeded === true };
 }

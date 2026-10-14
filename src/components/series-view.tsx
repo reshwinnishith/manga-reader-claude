@@ -11,7 +11,13 @@ import { Cover } from "./cover";
 import { BackIcon, CheckIcon, PlayIcon, SortIcon } from "./icons";
 import { ProgressBar, SectionHeader, TypeBadge } from "./ui";
 
-const PUBLICATION_LABEL = { ongoing: "Ongoing", completed: "Completed", hiatus: "On hiatus" } as const;
+const PUBLICATION_LABEL = {
+  ongoing: "Ongoing",
+  completed: "Completed",
+  hiatus: "On hiatus",
+  cancelled: "Cancelled",
+  upcoming: "Upcoming",
+} as const;
 
 export function SeriesView({ series }: { series: Series }) {
   const { data, actions } = useUserData();
@@ -43,11 +49,15 @@ export function SeriesView({ series }: { series: Series }) {
         <div className="series-head__cover"><Cover series={series} /></div>
         <div className="series-head__info">
           <h1 className="series-title">{series.title}</h1>
-          <p className="muted">{series.author} · {series.year}</p>
+          <p className="muted">{[series.author, series.year || null].filter(Boolean).join(" · ")}</p>
           <div className="meta-row">
             <TypeBadge type={series.type} />
             <span className="badge">{PUBLICATION_LABEL[series.status]}</span>
-            <span className="badge">{pluralize(series.chapters.length, "chapter")}</span>
+            {series.source ? (
+              series.reportedChapters ? <span className="badge">{pluralize(series.reportedChapters, "chapter")} listed</span> : null
+            ) : (
+              <span className="badge">{pluralize(series.chapters.length, "chapter")}</span>
+            )}
           </div>
           <p className="muted">{series.genres.join(" · ")}</p>
         </div>
@@ -104,6 +114,24 @@ export function SeriesView({ series }: { series: Series }) {
         </button>
       </section>
 
+      {series.source && (
+        <section className="section" aria-label="About this listing">
+          <p className="notice">
+            This title came from AniList search, which provides title information only. Chapters and reading aren&apos;t
+            available yet.
+            {series.externalUrl && (
+              <>
+                {" "}
+                <a className="link" href={series.externalUrl} target="_blank" rel="noopener noreferrer">
+                  View on AniList
+                </a>
+              </>
+            )}
+          </p>
+        </section>
+      )}
+
+      {!series.source && (
       <section className="section" aria-labelledby="chapters-h">
         <SectionHeader
           id="chapters-h"
@@ -146,6 +174,7 @@ export function SeriesView({ series }: { series: Series }) {
           })}
         </ul>
       </section>
+      )}
     </article>
   );
 }
