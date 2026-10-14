@@ -72,7 +72,7 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
             <PlayIcon width={20} height={20} /> {ctaLabel}
           </Link>
         ) : (
-          <span className="btn btn--secondary btn--large" aria-disabled="true">No chapters yet</span>
+          !series.source && <span className="btn btn--secondary btn--large" aria-disabled="true">No chapters yet</span>
         )}
         {savedTitle ? <SaveTitleButton title={savedTitle} /> : <AddToLibraryButton seriesId={series.id} title={series.title} />}
       </div>
@@ -117,7 +117,7 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
       {series.source && (
         <section className="section" aria-label="About this listing">
           <p className="notice">
-            Title details come from AniList. MangaDex chapters, when available, appear below. Check the edition before reading.
+            Title details come from AniList. Chapters appear below only when the correct edition can be verified.
             {series.externalUrl && (
               <>
                 {" "}
