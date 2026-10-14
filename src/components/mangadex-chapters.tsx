@@ -7,7 +7,7 @@ import { listMangaDexChapters, searchMangaDex, type MangaDexChapter, type MangaD
  * Checkpoint 1: let the user confirm a MangaDex match and browse chapters.
  * We link to MangaDex for reading until our in-app image reader is ready.
  */
-export function MangaDexChapters({ title }: { title: string }) {
+export function MangaDexChapters({ title, anilistId }: { title: string; anilistId: number }) {
   const [matches, setMatches] = useState<MangaDexTitle[]>([]);
   const [selected, setSelected] = useState<MangaDexTitle | null>(null);
   const [chapters, setChapters] = useState<MangaDexChapter[]>([]);
@@ -22,14 +22,14 @@ export function MangaDexChapters({ title }: { title: string }) {
     setChapters([]);
     setLoading(true);
     setError("");
-    searchMangaDex(title, controller.signal)
+    searchMangaDex(title, anilistId, controller.signal)
       .then(setMatches)
       .catch((err: unknown) => {
         if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Search failed.");
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [title]);
+  }, [title, anilistId]);
 
   useEffect(() => {
     if (!selected) return;
@@ -53,6 +53,10 @@ export function MangaDexChapters({ title }: { title: string }) {
       {loading && <p role="status">Searching MangaDex…</p>}
       {error && <p role="alert" className="notice">{error}</p>}
       {!loading && !error && matches.length === 0 && <p className="muted">No matching MangaDex titles found.</p>}
+      {!loading && !error && matches.length > 0 && !matches.some((m) => m.verified) && (
+        <p className="notice">No verified match for this edition was found on MangaDex. These are other editions or fan works, not confirmed to be the manga you saved.</p>
+      )}
+      {!loading && matches.some((m) => m.verified) && <p className="muted">✓ Verified AniList match found. Other editions are unverified.</p>}
       {!loading && matches.length > 0 && (
         <div className="chips" role="group" aria-label="Choose a MangaDex title">
           {matches.map((match) => (
@@ -63,7 +67,8 @@ export function MangaDexChapters({ title }: { title: string }) {
               aria-pressed={selected?.id === match.id}
               onClick={() => setSelected(match)}
             >
-              {match.title}
+              {match.coverUrl && <img src={match.coverUrl} alt="" width={42} height={60} style={{ objectFit: "cover", verticalAlign: "middle", marginRight: 8, borderRadius: 4 }} />}
+              <span>{match.verified ? "✓ " : ""}{match.title}<small style={{ display: "block", opacity: .75 }}>{match.category}{match.authors.length ? ` · ${match.authors.join(", ")}` : ""}</small></span>
             </button>
           ))}
         </div>
