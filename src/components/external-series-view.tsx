@@ -38,5 +38,5 @@ export function ExternalSeriesView({ id }: { id: string }) {
   const series = useMemo(() => title ? seriesFromSaved(title) : null, [title]);
   if (!data || (!series && !failed)) return <BlockSkeleton height={320} />;
   if (!series || !title) return <EmptyState title="Couldn't load this title" body="Check your connection and try searching again." action={{ href: "/discover", label: "Discover" }} />;
-  return <><SeriesView series={series} /><MangaDexChapters title={series.title} anilistId={title.externalId} /></>;
+  return <><SeriesView series={series} savedTitle={title} /><MangaDexChapters title={series.title} anilistId={title.externalId} /></>;
 }
