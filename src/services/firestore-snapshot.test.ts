@@ -365,7 +365,36 @@ describe("pruning", () => {
     const removed = await pruneObsoleteSnapshots(DB, TEST_USER, 8, ids[1]!); // pointer (oddly) still at revision 1
     expect(snapshotIds()).toContain(ids[1]);
     expect(removed).toBe(4); // 2-5; revision 1 is active, 6-8 are recent
-    expect(fake.counters.docReads - readsBefore).toBeLessThanOrEqual(5); // the 5 obsolete docs, never the recent ones
+    expect(fake.counters.docReads - readsBefore).toBeLessThanOrEqual(6); // the 5 obsolete docs + the pointer re-read, never the recent ones
+  });
+
+  it("protects the live pointer's snapshot even when the caller's active id is stale", async () => {
+    const ids = await stageRevisions([1, 2, 3, 4, 5, 6, 7, 8]);
+    fake.seed(`users/${TEST_USER.uid}/sync/userData`, { revision: 8, activeSnapshotId: ids[2] });
+    const removed = await pruneObsoleteSnapshots(DB, TEST_USER, 8, ids[8]!);
+    expect(snapshotIds()).toContain(ids[2]);
+    expect(removed).toBe(4); // 1, 3, 4, 5
+  });
+
+  it("never prunes into the retention window of a pointer that is behind the caller's revision", async () => {
+    const ids = await stageRevisions([1, 2, 3, 4, 5, 6, 7, 8]);
+    fake.seed(`users/${TEST_USER.uid}/sync/userData`, { revision: 5, activeSnapshotId: ids[5] });
+    await pruneObsoleteSnapshots(DB, TEST_USER, 8, ids[8]!);
+    expect(snapshotIds().sort()).toEqual([ids[3], ids[4], ids[5], ids[6], ids[7], ids[8]].sort()); // keeps 5-2.. onwards
+  });
+
+  it("a deletion the rules refuse does not stop the rest of the cleanup or surface as an error", async () => {
+    const ids = await stageRevisions([1, 2, 3, 4, 5, 6, 7, 8], true);
+    fake.interceptors.push((op, path) => {
+      if (op === "commit" && path.includes(`/${ids[2]}`)) throw Object.assign(new Error("Missing or insufficient permissions."), { code: "permission-denied" });
+    });
+    const removed = await pruneObsoleteSnapshots(DB, TEST_USER, 8, ids[8]!);
+    expect(removed).toBe(4); // 1, 3, 4, 5 (2 was refused)
+    expect(snapshotIds()).toContain(ids[2]);
+    expect(snapshotIds()).not.toContain(ids[1]);
+    expect(snapshotIds()).not.toContain(ids[5]);
+    expect(snapshotIds()).toEqual(expect.arrayContaining([ids[6], ids[7], ids[8]]));
+    for (const path of partPaths()) expect(snapshotIds()).toContain(path.split("/")[3]); // no orphaned parts
   });
 
   it("reads nothing when nothing is obsolete", async () => {

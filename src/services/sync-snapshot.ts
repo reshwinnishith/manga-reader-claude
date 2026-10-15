@@ -647,17 +647,31 @@ export async function pruneObsoleteSnapshots(
       query(collection(db, "users", user.uid, "snapshots"), where("revision", "<", keepFrom), limit(PRUNE_BATCH_SIZE)),
     );
     if (obsolete.empty) return 0;
-    const operations: ChunkedOperation[] = [];
+    // Pruning runs in the background, so the caller's view may be stale: another device can have
+    // published (or re-pointed) since. Re-read the pointer now; protect whatever it names and never
+    // retain less than the more conservative (lower) of the two revisions.
+    const protectedIds = new Set<string>([activeSnapshotId]);
+    let safeFrom = keepFrom;
+    const pointer = await getDoc(doc(db, "users", user.uid, "sync", "userData"));
+    if (pointer.exists()) {
+      const live = pointer.data() as { activeSnapshotId?: unknown; revision?: unknown };
+      if (typeof live.activeSnapshotId === "string") protectedIds.add(live.activeSnapshotId);
+      if (typeof live.revision === "number") safeFrom = Math.min(safeFrom, Math.max(live.revision - RETAINED_REVISIONS, 0));
+    }
     let removed = 0;
-    obsolete.forEach((d) => {
-      if (d.id === activeSnapshotId) return;
+    // One snapshot (its parts and itself) per atomic batch: if the rules refuse one because it became
+    // active in the meantime, or it is already gone, the others are still cleaned up.
+    for (const d of obsolete.docs) {
       const snap = d.data() as StagedSnapshotDoc;
+      if (protectedIds.has(d.id) || (typeof snap.revision === "number" && snap.revision >= safeFrom)) continue;
       const parts = typeof snap.totalParts === "number" ? snap.totalParts : 1;
-      if (parts > 1) for (let i = 0; i < parts; i++) operations.push({ type: "delete", ref: partRef(db, user.uid, d.id, i) });
-      operations.push({ type: "delete", ref: d.ref });
-      removed++;
-    });
-    if (operations.length > 0) await commitChunkedBatches(db, operations);
+      try {
+        await deleteSnapshotTree(db, user, d.id, parts);
+        removed++;
+      } catch (error) {
+        console.warn(`Obsolete snapshot ${d.id} was not pruned (it will be retried later):`, error);
+      }
+    }
     return removed;
   } catch (error) {
     console.warn("Obsolete snapshot pruning skipped or failed:", error);

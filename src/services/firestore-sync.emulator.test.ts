@@ -115,6 +115,27 @@ describe("sync client against the Firestore rules (real emulator)", () => {
     expect((await getDoc(doc(db, `users/userA/snapshots/${active}`))).exists()).toBe(true);
   });
 
+  it("a stale pruner whose captured active id is out of date neither aborts nor deletes the real active snapshot", async () => {
+    for (let i = 1; i <= 4; i++) await service.atomicSyncOrPush(db, USER, library(i));
+    await new Promise((resolve) => setTimeout(resolve, 1000)); // let background pruning settle
+    const stale = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!.activeSnapshotId as string;
+    // Another device re-pointed the (revision 9) pointer at an older-revision snapshot, and two more
+    // obsolete snapshots exist. The pruner below still believes `stale` is the active one.
+    await admin(async (adminDb) => {
+      const { getDoc: read, setDoc, updateDoc } = await import("firebase/firestore");
+      const base = (await read(doc(adminDb, `users/userA/snapshots/${stale}`))).data()!;
+      for (const [id, revision] of [["old-1", 1], ["old-2", 2]] as const) {
+        await setDoc(doc(adminDb, `users/userA/snapshots/${id}`), { ...base, snapshotId: id, revision });
+      }
+      await updateDoc(doc(adminDb, "users/userA/sync/userData"), { activeSnapshotId: "old-2", revision: 9 });
+    });
+    const removed = await pruneObsoleteSnapshots(db, USER, 9, stale);
+    const remaining = await snapshotIds();
+    expect(remaining).toContain("old-2"); // the real active snapshot survives
+    expect(remaining).not.toContain("old-1"); // and its rejection did not abort the rest of the cleanup
+    expect(removed).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
   it("two devices publishing at once both land under real transaction semantics", async () => {
     const other = new FirestoreSyncService();
     const [a, b] = await Promise.all([service.atomicSyncOrPush(db, USER, library(3, 0)), other.atomicSyncOrPush(db, USER, library(3, 100))]);
