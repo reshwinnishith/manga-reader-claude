@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRelease, verifyIdentity, type ReleaseRecord } from "./source-policy";
+import { classifyRelease, verifyIdentity, type ReadingPermission, type ReleaseRecord } from "./source-policy";
 import { resolveEdition } from "./mangadex-server";
 
 const uuidA = "11111111-1111-4111-8111-111111111111";
@@ -12,6 +12,10 @@ const manga = (id: string, al: string) => ({
 const release: ReleaseRecord = {
   id: uuidA, number: "1", volume: "1", title: "", language: "en", pages: 12,
   isUnavailable: false, publishedAt: "", groups: [{ name: "Translator", official: false }],
+};
+const grant: ReadingPermission = {
+  providerId: "mangadex", mangaId: uuidB, basis: "publisher-license", evidenceUrl: "https://example.com/permission-record",
+  reviewedBy: "test reviewer", reviewedAt: "2026-01-01",
 };
 const response = (body: unknown) => new Response(JSON.stringify(body), {
   status: 200, headers: { "Content-Type": "application/json" },
@@ -26,15 +30,19 @@ describe("provider identity and access policy", () => {
     expect(verifyIdentity({ mal: "222" }, 111, 222)).toEqual({ verified: true, by: "myanimelist" });
   });
 
-  it("withholds non-official English uploads under the conservative licensed-title policy", () => {
-    expect(classifyRelease(release, { licensedInEnglish: true }).restriction).toBe("licensed-in-english");
-    expect(classifyRelease(release, { licensedInEnglish: false }).readable).toBe(true);
-    expect(classifyRelease({ ...release, groups: [{ name: "Publisher", official: true }] }, { licensedInEnglish: true }).readable).toBe(true);
+  it("withholds English uploads of a licensed edition even when a grant exists", () => {
+    expect(classifyRelease(release, { licensedInEnglish: true, grants: [grant] }).restriction).toBe("licensed-in-english");
+    expect(classifyRelease({ ...release, groups: [{ name: "Publisher", official: true }] }, { licensedInEnglish: true, grants: [grant] }).readable).toBe(false);
+  });
+
+  it("makes a release readable only with an affirmative grant", () => {
+    expect(classifyRelease(release, { licensedInEnglish: false }).restriction).toBe("not-permitted");
+    expect(classifyRelease(release, { licensedInEnglish: false, grants: [grant] }).readable).toBe(true);
   });
 
   it("rejects unavailable and uncredited chapter records", () => {
-    expect(classifyRelease({ ...release, pages: 0 }, { licensedInEnglish: false }).readable).toBe(false);
-    expect(classifyRelease({ ...release, groups: [] }, { licensedInEnglish: false }).restriction).toBe("uncredited");
+    expect(classifyRelease({ ...release, pages: 0 }, { licensedInEnglish: false, grants: [grant] }).readable).toBe(false);
+    expect(classifyRelease({ ...release, groups: [] }, { licensedInEnglish: false, grants: [grant] }).restriction).toBe("uncredited");
   });
 });
 

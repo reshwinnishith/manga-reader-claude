@@ -43,7 +43,7 @@ function ChapterSources({ title }: { title: SavedTitle }) {
     {loading && <p role="status">Looking for the correct edition…</p>}
     {error && <div role="alert" className="notice">{error} <button className="btn btn--secondary" onClick={() => { setEditions([]); setLoading(true); setError(""); setAttempt((n) => n + 1); }}>Retry chapters</button></div>}
     {!loading && !error && !editions.length && <p className="notice">No verified in-app chapter source for this edition.{official.length ? " Use the official reader above." : " We will not substitute a different edition."}</p>}
-    {!loading && editions.length > 0 && !chapters.length && <p className="muted">Edition verified. No available English chapters on MangaDex.{hidden > 0 ? ` ${hidden} release${hidden === 1 ? "" : "s"} withheld (${licensed ? "official English link present or " : ""}uncredited uploads are not shown).` : ""}{official.length ? " Use the official reader above." : ""}</p>}
+    {!loading && editions.length > 0 && !chapters.length && <p className="muted">Edition verified. No available English chapters on MangaDex.{hidden > 0 ? ` ${hidden} release${hidden === 1 ? "" : "s"} withheld (in-app reading isn't enabled for this edition${licensed ? ", which has an official English release" : ""}).` : ""}{official.length ? " Use the official reader above." : ""}</p>}
     {chapters.length > 0 && <><p className="muted">Verified edition on MangaDex · {chapters.filter((c) => c.readable).length} readable English releases · Specials are listed separately.{hidden > 0 ? ` · ${hidden} withheld` : ""}</p>
       <ul className="chapters">{chapters.map((chapter) => {
         const saved = progress?.chapters[chapter.id];

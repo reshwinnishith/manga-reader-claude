@@ -9,6 +9,8 @@
 import {
   classifyRelease,
   officialEnglishLinks,
+  permissionsFor,
+  type ReadingPermission,
   parseMangaRecord,
   parseReleaseRecord,
   verifyIdentity,
@@ -257,15 +259,16 @@ export interface ResolvedEdition {
   checkedAt: string;
 }
 
-export function summarizeReleases(manga: MangaRecord, feed: ReleaseRecord[]): Pick<ResolvedEdition, "officialLinks" | "licensedInEnglish" | "releases" | "hidden"> {
+export function summarizeReleases(manga: MangaRecord, feed: ReleaseRecord[], permissions?: readonly ReadingPermission[]): Pick<ResolvedEdition, "officialLinks" | "licensedInEnglish" | "releases" | "hidden"> {
   const officialLinks = officialEnglishLinks(manga.links);
   const licensedInEnglish = officialLinks.length > 0;
+  const grants = permissionsFor(manga.id, permissions);
   const hidden: Partial<Record<Restriction, number>> = {};
   const releases: ResolvedRelease[] = [];
   for (const r of feed) {
-    const access = classifyRelease(r, { licensedInEnglish });
-    // Restricted releases are counted, not listed: never show fan uploads of a
-    // licensed edition or uncredited "notice" uploads as chapters.
+    const access = classifyRelease(r, { licensedInEnglish, grants });
+    // Releases without permission are counted, not listed. External official
+    // chapters stay listed as link-outs; they never imply in-app permission.
     if (!access.readable && access.restriction !== "external" && access.restriction !== "unavailable") {
       hidden[access.restriction!] = (hidden[access.restriction!] ?? 0) + 1;
       continue;
@@ -296,10 +299,12 @@ export interface ResolveInput {
 const resolveCache = ttlCache<ResolvedEdition>(60);
 
 /** Find the exact edition by catalogue ID, then classify every English release. */
-export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fetch): Promise<ResolvedEdition> {
+export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fetch, permissions?: readonly ReadingPermission[]): Promise<ResolvedEdition> {
   const titles = [...new Set(input.titles.map((t) => t.trim()).filter((t) => t.length >= 2))].slice(0, 4);
   const key = `${input.anilistId}:${input.malId ?? ""}:${titles.join("|")}`;
-  const hit = resolveCache.get(key);
+  // An explicit registry (tests, previews of a draft policy) never reads or writes the shared cache.
+  const cacheable = permissions === undefined;
+  const hit = cacheable ? resolveCache.get(key) : undefined;
   if (hit) return hit;
   const base = { providerId: "mangadex" as const, officialLinks: [], licensedInEnglish: false, releases: [], hidden: {}, checkedAt: new Date().toISOString() };
 
@@ -321,7 +326,7 @@ export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fet
   }
   if (matches.size > 1) {
     const result: ResolvedEdition = { ...base, status: "conflict" };
-    resolveCache.set(key, result);
+    if (cacheable) resolveCache.set(key, result);
     return result;
   }
   const selected = matches.values().next().value;
@@ -330,7 +335,7 @@ export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fet
   if (!match) {
     // A MyAnimeList match whose AniList link points elsewhere is a conflict, not a match.
     const result: ResolvedEdition = { ...base, status: conflict ? "conflict" : "not-found" };
-    resolveCache.set(key, result);
+    if (cacheable) resolveCache.set(key, result);
     return result;
   }
   const feed = await getEnglishFeed(match.id, fetchImpl);
@@ -341,14 +346,14 @@ export async function resolveEdition(input: ResolveInput, fetchImpl: Fetch = fet
     mangaId: match.id,
     sourceTitle: match.title,
     creators: match.creators,
-    ...summarizeReleases(match, feed),
+    ...summarizeReleases(match, feed, permissions),
   };
-  resolveCache.set(key, result);
+  if (cacheable) resolveCache.set(key, result);
   return result;
 }
 
 /** Chapters for a known MangaDex edition (reader navigation), with the same rights rules. */
-export async function editionReleases(mangaId: string, fetchImpl: Fetch = fetch) {
+export async function editionReleases(mangaId: string, fetchImpl: Fetch = fetch, permissions?: readonly ReadingPermission[]) {
   const [manga, feed] = await Promise.all([getManga(mangaId, fetchImpl), getEnglishFeed(mangaId, fetchImpl)]);
-  return { mangaId, sourceTitle: manga.title, ...summarizeReleases(manga, feed) };
+  return { mangaId, sourceTitle: manga.title, ...summarizeReleases(manga, feed, permissions) };
 }

@@ -135,3 +135,17 @@ export function selectChapters(chapters: MangaDexChapter[], preferred: string[] 
     return (a.publishedAt || "").localeCompare(b.publishedAt || "") || a.id.localeCompare(b.id);
   });
 }
+
+/**
+ * Previous/next for the in-app reader. Only chapters readable in-app take part:
+ * external-only, withheld and unavailable releases are never navigation targets
+ * (the title page still lists external ones as link-outs). Duplicate numbers are
+ * collapsed by selectChapters, keeping the chapter being read, so navigation
+ * never repeats a chapter or jumps to another group's copy of the same one.
+ */
+export function readerNeighbors(chapters: MangaDexChapter[], currentId: string): { previous?: MangaDexChapter; next?: MangaDexChapter } {
+  const sequence = selectChapters(chapters.filter((c) => c.readable === true && !c.externalUrl), [currentId]);
+  const index = sequence.findIndex((c) => c.id === currentId);
+  if (index < 0) return {};
+  return { previous: sequence[index - 1], next: sequence[index + 1] };
+}
