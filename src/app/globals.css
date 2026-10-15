@@ -458,3 +458,12 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 .source-reader__pages--paged .source-page { min-height: 78dvh; }
 .source-reader button:disabled { opacity: .5; }
 .source-reader button:focus-visible, .source-reader a:focus-visible { outline: 3px solid #a6b7ff; outline-offset: 3px; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+

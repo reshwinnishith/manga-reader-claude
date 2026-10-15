@@ -1,0 +1,328 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users
+// Document ID: {userId} (matches request.auth.uid)
+// Fields:
+//   - uid: string (required, 1-128 chars, matches request.auth.uid and userId, immutable)
+//   - createdAt: string or timestamp (required, immutable) - Account creation timestamp
+//   - updatedAt: string or timestamp (required) - Profile update timestamp
+//   - version: number (optional, 1-1000) - Profile / schema version
+//   - anonymous: bool (optional) - True if the user is authenticated anonymously
+//   - email: string (optional, 1-254 chars) - User email address
+//   - displayName: string (optional, 1-100 chars) - User display name
+//   - photoURL: string (optional, 1-2000 chars) - User avatar URL
+//
+// Collection: users/{userId}/library
+// Document ID: {entryId} (media or series identifier)
+// Fields:
+//   - mediaId: string (required if seriesId absent, 1-200 chars, immutable)
+//   - seriesId: string (optional, 1-200 chars, immutable)
+//   - title: string (required, 1-500 chars) - Manga title
+//   - status: string (required, enum: 'reading' | 'completed' | 'plan_to_read' | 'planned' | 'on_hold' | 'on-hold' | 'dropped')
+//   - updatedAt: string or timestamp (required) - Last activity timestamp
+//   - coverImage: string (optional, 1-2000 chars) - Remote cover URL or storage path
+//   - coverUrl: string (optional, 1-2000 chars) - Alias for remote cover URL
+//   - totalChapters: number (optional, 0-50000) - Total chapter count
+//   - addedAt: string or timestamp (optional, immutable) - Timestamp added to library
+//
+// Collection: users/{userId}/progress
+// Document ID: {seriesId} (matches seriesId field)
+// Fields:
+//   - seriesId: string (required, 1-200 chars, matches seriesId in path, immutable)
+//   - updatedAt: string or timestamp (required) - Progress update timestamp
+//   - chapterId: string (optional, 1-200 chars) - Current chapter identifier
+//   - lastChapterId: string (optional, 1-200 chars) - Last chapter read identifier
+//   - chapterNumber: string or number (optional, <= 50 chars or >= 0) - Chapter display number
+//   - page: number (optional, 0-100000) - Current page index
+//   - pageCount: number (optional, 0-100000) - Chapter page count
+//   - percentage: number (optional, 0-100) - Reading progress percentage
+//   - status: string (optional, 1-50 chars) - Reading progress status
+//   - atEnd: bool (optional) - Reached chapter end
+//   - completed: bool (optional) - Chapter marked completed
+//   - chapters: map (optional) - Map of per-chapter progress records
+//
+// Collection: users/{userId}/readerModes
+// Document ID: {seriesId} (matches seriesId field)
+// Fields:
+//   - seriesId: string (required, 1-200 chars, matches seriesId in path, immutable)
+//   - mode: string (required, enum: 'vertical' | 'single-rtl' | 'single-ltr' | 'double-rtl' | 'double-ltr' | 'webtoon' | 'paged-rtl')
+//   - updatedAt: string or timestamp (required) - Mode preference timestamp
+//
+// Collection: users/{userId}/savedTitles
+// Document ID: {mediaId} (matches mediaId or id field)
+// Fields:
+//   - mediaId: string (required if id absent, 1-200 chars, immutable)
+//   - id: string (optional, 1-200 chars, immutable) - Local series ID alias
+//   - title: string (required, 1-500 chars) - Manga title
+//   - savedAt: string or timestamp (required if fetchedAt absent) - Time title was saved
+//   - fetchedAt: string or timestamp (optional) - Time metadata was fetched
+//   - coverImage: string (optional, 1-2000 chars) - Cover image URL
+//   - coverUrl: string (optional, 1-2000 chars) - Alias for cover image URL
+//   - source: string (optional, 1-50 chars) - Source catalog name (e.g., anilist)
+//   - externalId: number (optional, >= 0) - External database ID
+//   - malId: number (optional, >= 0) - MyAnimeList ID
+//   - type: string (optional, enum: 'manga' | 'manhwa' | 'manhua')
+//   - description: string (optional, <= 10000 chars) - Title synopsis
+//   - genres: list (optional, <= 50 items) - Genre tags
+//   - authors: list (optional, <= 50 items) - Authors/creators
+//   - alternateTitles: list (optional, <= 50 items) - Aliases / alternate titles
+//   - year: number (optional, 1800-2200) - Release year
+//   - status: string (optional, 1-50 chars) - Publication status
+//   - reportedChapters: number (optional, >= 0) - Reported chapter count
+//   - url: string (optional, 1-2000 chars) - Source URL
+//
+// Collection: users/{userId}/sync
+// Document ID: 'userData' (singleton backup aggregate)
+// Fields:
+//   - version: number (required, 1-1000) - Sync schema version
+//   - updatedAt: string or timestamp (required) - Timestamp of full sync
+//   - library: map (optional) - Serialized library map
+//   - progress: map (optional) - Serialized progress map
+//   - readerModes: map (optional) - Serialized reader modes map
+//   - savedTitles: map (optional) - Serialized saved titles map
+//   - seeded: bool (optional) - Seed state flag
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidDate(val) {
+      return val is timestamp || (val is string && val.size() >= 10 && val.size() <= 50);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data, userId) {
+      let allowedFields = [
+        'uid', 'createdAt', 'updatedAt', 'version',
+        'anonymous', 'email', 'displayName', 'photoURL'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['uid', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == userId && data.uid == request.auth.uid &&
+        isValidDate(data.createdAt) &&
+        isValidDate(data.updatedAt) &&
+        (!('version' in data) || (data.version is number && data.version >= 1 && data.version <= 1000)) &&
+        (!('anonymous' in data) || (data.anonymous is bool)) &&
+        (!('email' in data) || (data.email is string && data.email.size() > 0 && data.email.size() <= 254)) &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2000));
+    }
+
+    function isValidLibraryEntry(data, entryId) {
+      let allowedFields = [
+        'mediaId', 'seriesId', 'title', 'coverImage',
+        'coverUrl', 'status', 'totalChapters', 'updatedAt', 'addedAt'
+      ];
+      let validStatuses = [
+        'reading', 'completed', 'plan_to_read',
+        'planned', 'on_hold', 'on-hold', 'dropped'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['title', 'status', 'updatedAt']) &&
+        (('mediaId' in data && data.mediaId is string && data.mediaId.size() > 0 && data.mediaId.size() <= 200) ||
+         ('seriesId' in data && data.seriesId is string && data.seriesId.size() > 0 && data.seriesId.size() <= 200)) &&
+        (!('mediaId' in data) || (data.mediaId is string && data.mediaId.size() > 0 && data.mediaId.size() <= 200)) &&
+        (!('seriesId' in data) || (data.seriesId is string && data.seriesId.size() > 0 && data.seriesId.size() <= 200)) &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
+        data.status in validStatuses &&
+        isValidDate(data.updatedAt) &&
+        (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 2000)) &&
+        (!('coverUrl' in data) || (data.coverUrl is string && data.coverUrl.size() <= 2000)) &&
+        (!('totalChapters' in data) || (data.totalChapters is number && data.totalChapters >= 0 && data.totalChapters <= 50000)) &&
+        (!('addedAt' in data) || isValidDate(data.addedAt));
+    }
+
+    function isValidProgress(data, seriesId) {
+      let allowedFields = [
+        'seriesId', 'chapterId', 'chapterNumber', 'page',
+        'percentage', 'updatedAt', 'status', 'lastChapterId',
+        'chapters', 'atEnd', 'completed', 'pageCount'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['seriesId', 'updatedAt']) &&
+        data.seriesId is string && data.seriesId == seriesId && data.seriesId.size() > 0 && data.seriesId.size() <= 200 &&
+        isValidDate(data.updatedAt) &&
+        (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() > 0 && data.chapterId.size() <= 200)) &&
+        (!('lastChapterId' in data) || (data.lastChapterId is string && data.lastChapterId.size() > 0 && data.lastChapterId.size() <= 200)) &&
+        (!('chapterNumber' in data) || ((data.chapterNumber is string && data.chapterNumber.size() <= 50) || (data.chapterNumber is number && data.chapterNumber >= 0 && data.chapterNumber <= 100000))) &&
+        (!('page' in data) || (data.page is number && data.page >= 0 && data.page <= 100000)) &&
+        (!('pageCount' in data) || (data.pageCount is number && data.pageCount >= 0 && data.pageCount <= 100000)) &&
+        (!('percentage' in data) || (data.percentage is number && data.percentage >= 0 && data.percentage <= 100)) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 50)) &&
+        (!('atEnd' in data) || (data.atEnd is bool)) &&
+        (!('completed' in data) || (data.completed is bool)) &&
+        (!('chapters' in data) || (data.chapters is map));
+    }
+
+    function isValidReaderMode(data, seriesId) {
+      let allowedFields = ['seriesId', 'mode', 'updatedAt'];
+      let validModes = [
+        'vertical', 'single-rtl', 'single-ltr',
+        'double-rtl', 'double-ltr', 'webtoon', 'paged-rtl'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['seriesId', 'mode', 'updatedAt']) &&
+        data.seriesId is string && data.seriesId == seriesId && data.seriesId.size() > 0 && data.seriesId.size() <= 200 &&
+        data.mode in validModes &&
+        isValidDate(data.updatedAt);
+    }
+
+    function isValidSavedTitle(data, mediaId) {
+      let allowedFields = [
+        'mediaId', 'id', 'title', 'coverImage', 'coverUrl',
+        'savedAt', 'fetchedAt', 'source', 'externalId', 'malId',
+        'type', 'description', 'genres', 'authors',
+        'alternateTitles', 'year', 'status', 'reportedChapters', 'url'
+      ];
+      let validTypes = ['manga', 'manhwa', 'manhua'];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['title']) &&
+        (('mediaId' in data && data.mediaId is string && data.mediaId == mediaId && data.mediaId.size() > 0 && data.mediaId.size() <= 200) ||
+         ('id' in data && data.id is string && data.id == mediaId && data.id.size() > 0 && data.id.size() <= 200)) &&
+        (!('mediaId' in data) || (data.mediaId is string && data.mediaId == mediaId && data.mediaId.size() > 0 && data.mediaId.size() <= 200)) &&
+        (!('id' in data) || (data.id is string && data.id.size() > 0 && data.id.size() <= 200)) &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
+        (('savedAt' in data && isValidDate(data.savedAt)) ||
+         ('fetchedAt' in data && isValidDate(data.fetchedAt))) &&
+        (!('savedAt' in data) || isValidDate(data.savedAt)) &&
+        (!('fetchedAt' in data) || isValidDate(data.fetchedAt)) &&
+        (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 2000)) &&
+        (!('coverUrl' in data) || (data.coverUrl is string && data.coverUrl.size() <= 2000)) &&
+        (!('source' in data) || (data.source is string && data.source.size() <= 50)) &&
+        (!('externalId' in data) || (data.externalId is number && data.externalId >= 0)) &&
+        (!('malId' in data) || (data.malId is number && data.malId >= 0)) &&
+        (!('type' in data) || (data.type in validTypes)) &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 10000)) &&
+        (!('genres' in data) || (data.genres is list && data.genres.size() <= 50)) &&
+        (!('authors' in data) || (data.authors is list && data.authors.size() <= 50)) &&
+        (!('alternateTitles' in data) || (data.alternateTitles is list && data.alternateTitles.size() <= 50)) &&
+        (!('year' in data) || (data.year is number && data.year >= 1800 && data.year <= 2200)) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 50)) &&
+        (!('reportedChapters' in data) || (data.reportedChapters is number && data.reportedChapters >= 0)) &&
+        (!('url' in data) || (data.url is string && data.url.size() <= 2000));
+    }
+
+    function isValidSyncData(data) {
+      let allowedFields = [
+        'version', 'updatedAt', 'library', 'progress',
+        'readerModes', 'savedTitles', 'seeded'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['version', 'updatedAt']) &&
+        data.version is number && data.version >= 1 && data.version <= 1000 &&
+        isValidDate(data.updatedAt) &&
+        (!('library' in data) || (data.library is map)) &&
+        (!('progress' in data) || (data.progress is map)) &&
+        (!('readerModes' in data) || (data.readerModes is map)) &&
+        (!('savedTitles' in data) || (data.savedTitles is map)) &&
+        (!('seeded' in data) || (data.seeded is bool));
+    }
+
+    // ===============================================================
+    // Rules Definition
+    // ===============================================================
+
+    // Root user profiles
+    match /users/{userId} {
+      // Individual users may get and delete their own user profile.
+      // Blanket collection queries on /users are strictly denied.
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow delete: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+        isValidUser(request.resource.data, userId);
+
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data, userId) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.createdAt == resource.data.createdAt;
+
+      // Library subcollection
+      match /library/{entryId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidLibraryEntry(request.resource.data, entryId);
+
+        allow update: if isOwner(userId) &&
+          isValidLibraryEntry(request.resource.data, entryId) &&
+          (!('mediaId' in resource.data) || request.resource.data.mediaId == resource.data.mediaId) &&
+          (!('seriesId' in resource.data) || request.resource.data.seriesId == resource.data.seriesId);
+      }
+
+      // Progress subcollection
+      match /progress/{seriesId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidProgress(request.resource.data, seriesId);
+
+        allow update: if isOwner(userId) &&
+          isValidProgress(request.resource.data, seriesId) &&
+          request.resource.data.seriesId == resource.data.seriesId;
+      }
+
+      // Reader modes preference subcollection
+      match /readerModes/{seriesId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidReaderMode(request.resource.data, seriesId);
+
+        allow update: if isOwner(userId) &&
+          isValidReaderMode(request.resource.data, seriesId) &&
+          request.resource.data.seriesId == resource.data.seriesId;
+      }
+
+      // Saved external titles subcollection
+      match /savedTitles/{mediaId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidSavedTitle(request.resource.data, mediaId);
+
+        allow update: if isOwner(userId) &&
+          isValidSavedTitle(request.resource.data, mediaId) &&
+          (!('mediaId' in resource.data) || request.resource.data.mediaId == resource.data.mediaId) &&
+          (!('id' in resource.data) || request.resource.data.id == resource.data.id);
+      }
+
+      // Full sync aggregate document
+      match /sync/{docId} {
+        allow read, delete: if isOwner(userId) && docId == 'userData';
+
+        allow create, update: if isOwner(userId) &&
+          docId == 'userData' &&
+          isValidSyncData(request.resource.data);
+      }
+    }
+
+    // Default deny: all unspecified paths are completely inaccessible
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

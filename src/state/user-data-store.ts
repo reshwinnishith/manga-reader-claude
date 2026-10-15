@@ -1,6 +1,7 @@
 import { emptyUserData } from "@/lib/user-data";
 import type { ReaderMode, ReadingStatus, SavedTitle, Series, UserData } from "@/domain/types";
-import { createLocalStorageAdapter, type PersistenceAdapter, type StorageRecovery } from "@/services/persistence";
+import type { PersistenceAdapter, StorageRecovery } from "@/services/persistence";
+import { createSyncedPersistenceAdapter } from "@/services/firestore-sync";
 import * as ops from "@/lib/user-data";
 
 export interface UserDataStore {
@@ -101,6 +102,6 @@ let appStore: UserDataStore | undefined;
 
 /** Lazily created singleton for the running app (client only). */
 export function getAppStore(): UserDataStore {
-  appStore ??= createUserDataStore({ adapter: createLocalStorageAdapter() });
+  appStore ??= createUserDataStore({ adapter: createSyncedPersistenceAdapter() });
   return appStore;
 }

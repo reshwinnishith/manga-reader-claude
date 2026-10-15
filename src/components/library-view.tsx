@@ -18,6 +18,7 @@ import { useUserData } from "@/state/use-user-data";
 import { Cover } from "./cover";
 import { DiscoverIcon } from "./icons";
 import { EmptyState, GridSkeleton, PageHeader, TypeBadge } from "./ui";
+import { SyncStatusIndicator } from "./sync-status";
 
 const STATUS_FILTERS: { value: LibraryFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -142,7 +143,7 @@ export function LibraryView() {
         subtitle={data ? (hasActiveFilters ? `${items.length} of ${totalInLibrary} series` : `${totalInLibrary} series`) : undefined}
       />
 
-      <div className="dcard__actions" style={{ marginBottom: 16 }}>
+      <div className="dcard__actions" style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
         <button
           className="btn btn--secondary btn--compact"
           type="button"
@@ -192,6 +193,7 @@ export function LibraryView() {
             e.target.value = "";
           }}
         />
+        <SyncStatusIndicator />
       </div>
 
       {recovery && (

@@ -61,3 +61,10 @@ export const SortIcon = (p: IconProps) => (
 export const AlertIcon = (p: IconProps) => (
   <svg {...base(p)}><path d="M12 3 2.5 20h19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
 );
+export const CloudIcon = (p: IconProps) => (
+  <svg {...base(p)}><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg>
+);
+export const RefreshIcon = (p: IconProps) => (
+  <svg {...base(p)}><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 16h5v5" /></svg>
+);
+
