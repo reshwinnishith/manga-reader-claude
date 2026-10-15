@@ -82,6 +82,10 @@ rules_version = '2';
 // Fields:
 //   - version: number (required, 1-1000) - Sync schema version
 //   - updatedAt: string or timestamp (required) - Timestamp of full sync
+//   - revision: number (optional, >= 0) - Sync revision counter
+//   - syncStatus: string (optional, enum: 'ready' | 'syncing') - Sync status
+//   - syncSessionId: string (optional, <= 100 chars) - Active sync session ID
+//   - tombstones: map (optional) - Deleted series tombstones mapping
 //   - library: map (optional) - Serialized library map
 //   - progress: map (optional) - Serialized progress map
 //   - readerModes: map (optional) - Serialized reader modes map
@@ -227,12 +231,17 @@ service cloud.firestore {
     function isValidSyncData(data) {
       let allowedFields = [
         'version', 'updatedAt', 'library', 'progress',
-        'readerModes', 'savedTitles', 'seeded'
+        'readerModes', 'savedTitles', 'seeded',
+        'revision', 'syncStatus', 'syncSessionId', 'tombstones'
       ];
       return data.keys().hasOnly(allowedFields) &&
         data.keys().hasAll(['version', 'updatedAt']) &&
         data.version is number && data.version >= 1 && data.version <= 1000 &&
         isValidDate(data.updatedAt) &&
+        (!('revision' in data) || (data.revision is number && data.revision >= 0)) &&
+        (!('syncStatus' in data) || (data.syncStatus in ['ready', 'syncing'])) &&
+        (!('syncSessionId' in data) || (data.syncSessionId is string && data.syncSessionId.size() <= 100)) &&
+        (!('tombstones' in data) || (data.tombstones is map)) &&
         (!('library' in data) || (data.library is map)) &&
         (!('progress' in data) || (data.progress is map)) &&
         (!('readerModes' in data) || (data.readerModes is map)) &&
@@ -312,7 +321,8 @@ service cloud.firestore {
 
       // Full sync aggregate document
       match /sync/{docId} {
-        allow read, delete: if isOwner(userId) && docId == 'userData';
+        allow read: if isOwner(userId) && docId == 'userData';
+        allow delete: if isOwner(userId);
 
         allow create, update: if isOwner(userId) &&
           docId == 'userData' &&

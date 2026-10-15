@@ -89,7 +89,7 @@ export function createUserDataStore({
     },
     addToLibrary: (id, status) => update((d) => ops.addToLibrary(d, id, now(), status)),
     saveExternalTitle: (title) => update((d) => ops.saveExternalTitle(d, title, now())),
-    removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
+    removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id, now())),
     replaceData: (data) => update(() => data),
     setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),
     setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode)),

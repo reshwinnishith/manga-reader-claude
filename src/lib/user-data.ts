@@ -22,6 +22,7 @@ export const emptyUserData = (): UserData => ({
   progress: {},
   readerModes: {},
   savedTitles: {},
+  tombstones: {},
   seeded: false,
 });
 
@@ -31,9 +32,24 @@ export function addToLibrary(
   now: string,
   status: ReadingStatus = "planned",
 ): UserData {
-  if (data.library[seriesId]) return data;
+  const hasTombstone = Boolean(data.tombstones && seriesId in data.tombstones);
+  if (data.library[seriesId]) {
+    if (!hasTombstone) return data;
+    const tombstones = { ...data.tombstones };
+    delete tombstones[seriesId];
+    return { ...data, tombstones };
+  }
+  let tombstones = data.tombstones;
+  if (hasTombstone) {
+    tombstones = { ...data.tombstones };
+    delete tombstones[seriesId];
+  }
   const entry: LibraryEntry = { seriesId, status, addedAt: now };
-  return { ...data, library: { ...data.library, [seriesId]: entry } };
+  return {
+    ...data,
+    library: { ...data.library, [seriesId]: entry },
+    ...(tombstones ? { tombstones } : {}),
+  };
 }
 
 /**
@@ -46,11 +62,16 @@ export function saveExternalTitle(data: UserData, title: SavedTitle, now: string
   return addToLibrary(withTitle, title.id, now);
 }
 
-export function removeFromLibrary(data: UserData, seriesId: string): UserData {
+export function removeFromLibrary(
+  data: UserData,
+  seriesId: string,
+  now: string = new Date().toISOString(),
+): UserData {
   if (!data.library[seriesId]) return data;
   const library = { ...data.library };
   delete library[seriesId];
-  return { ...data, library };
+  const tombstones = { ...data.tombstones, [seriesId]: now };
+  return { ...data, library, tombstones };
 }
 
 export function setReadingStatus(
@@ -241,5 +262,26 @@ export function migrateUserData(raw: unknown): UserData | null {
     }
   }
 
-  return { version: USER_DATA_VERSION, library, progress, readerModes, savedTitles, seeded: raw.seeded === true };
+  const tombstones: Record<string, string> = {};
+  if (isRecord(raw.tombstones)) {
+    for (const [id, value] of Object.entries(raw.tombstones)) {
+      if (
+        typeof value === "string" &&
+        id.trim().length > 0 &&
+        !isNaN(new Date(value).getTime())
+      ) {
+        tombstones[id] = value;
+      }
+    }
+  }
+
+  return {
+    version: USER_DATA_VERSION,
+    library,
+    progress,
+    readerModes,
+    savedTitles,
+    tombstones,
+    seeded: raw.seeded === true,
+  };
 }

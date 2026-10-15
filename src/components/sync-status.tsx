@@ -1,23 +1,43 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { syncService, type SyncStatus } from "@/services/firestore-sync";
+import {
+  isCloudSyncEnabled,
+  setCloudSyncEnabled,
+  syncService,
+  type SyncStatus,
+} from "@/services/firestore-sync";
+import { isFirebaseConfigured } from "@/services/firebase";
 import { useUserData } from "@/state/use-user-data";
 import { AlertIcon, CheckIcon, CloudIcon, RefreshIcon } from "./icons";
 
 export function SyncStatusIndicator({ showButton = true }: { showButton?: boolean }) {
   const [status, setStatus] = useState<SyncStatus>(() => syncService.getStatus());
+  const [optedIn, setOptedIn] = useState<boolean>(() => isCloudSyncEnabled());
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const { data } = useUserData();
 
   useEffect(() => {
     return syncService.subscribeStatus((newStatus) => {
       setStatus(newStatus);
+      setOptedIn(isCloudSyncEnabled());
     });
   }, []);
 
   const handleManualSync = async () => {
     if (!data || isManualSyncing) return;
+    setIsManualSyncing(true);
+    try {
+      await syncService.syncWithRemote(data);
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
+
+  const handleEnableSync = async () => {
+    if (!data || isManualSyncing) return;
+    setCloudSyncEnabled(true);
+    setOptedIn(true);
     setIsManualSyncing(true);
     try {
       await syncService.syncWithRemote(data);
@@ -68,6 +88,7 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
   };
 
   const { label, color, icon, title } = getStatusConfig();
+  const canEnableCloud = isFirebaseConfigured() && !optedIn;
 
   return (
     <div
@@ -96,7 +117,25 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
         <span>{label}</span>
       </span>
 
-      {showButton && status !== "disabled" && (
+      {showButton && canEnableCloud && (
+        <button
+          type="button"
+          onClick={handleEnableSync}
+          disabled={isManualSyncing}
+          className="btn btn--secondary btn--compact"
+          style={{
+            padding: "2px 8px",
+            fontSize: "0.75rem",
+            marginLeft: "4px",
+            minHeight: "26px",
+          }}
+          aria-label="Enable Cloud Sync"
+        >
+          {isManualSyncing ? "Enabling..." : "Enable Cloud Sync"}
+        </button>
+      )}
+
+      {showButton && optedIn && status !== "disabled" && (
         <button
           type="button"
           onClick={handleManualSync}
@@ -108,9 +147,13 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
             marginLeft: "4px",
             minHeight: "26px",
           }}
-          aria-label="Synchronize library now"
+          aria-label={status === "error" ? "Retry cloud synchronization" : "Synchronize library now"}
         >
-          {status === "syncing" || isManualSyncing ? "Syncing..." : "Sync now"}
+          {status === "syncing" || isManualSyncing
+            ? "Syncing..."
+            : status === "error"
+            ? "Retry sync"
+            : "Sync now"}
         </button>
       )}
     </div>

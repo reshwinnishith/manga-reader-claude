@@ -126,6 +126,8 @@ export interface UserData {
   readerModes: Record<string, ReaderMode>;
   /** Titles saved from search, keyed by local series id. Added in v3. */
   savedTitles: Record<string, SavedTitle>;
+  /** Tombstones for deleted library titles: seriesId -> deletedAt ISO string. */
+  tombstones?: Record<string, string>;
   /** True once the demo library has been seeded (never reseed after). */
   seeded: boolean;
 }

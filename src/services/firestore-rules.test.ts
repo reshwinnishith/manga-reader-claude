@@ -13,6 +13,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   getDocs,
   collection,
 } from "firebase/firestore";
@@ -49,16 +50,33 @@ describe("Firestore Security Rules for MangaReader", () => {
   let emulatorAvailable = false;
 
   beforeAll(async () => {
-    emulatorAvailable = await isPortOpen(8088);
+    let host = "127.0.0.1";
+    let port = 8088;
+
+    if (process.env.FIRESTORE_EMULATOR_HOST) {
+      const parts = process.env.FIRESTORE_EMULATOR_HOST.split(":");
+      host = parts[0] || "127.0.0.1";
+      port = parseInt(parts[1] || "8088", 10);
+      emulatorAvailable = await isPortOpen(port, host);
+    } else {
+      for (const candidatePort of [8088, 8080]) {
+        if (await isPortOpen(candidatePort, host)) {
+          port = candidatePort;
+          emulatorAvailable = true;
+          break;
+        }
+      }
+    }
+
     if (!emulatorAvailable) {
-      console.warn("Firestore emulator is not running on port 8088. Skipping rules tests.");
+      console.warn("Firestore emulator is not reachable (checked ports 8088, 8080). Transparently skipping rules tests.");
       return;
     }
     testEnv = await initializeTestEnvironment({
       projectId: PROJECT_ID,
       firestore: {
-        host: "127.0.0.1",
-        port: 8088,
+        host,
+        port,
         rules: readFileSync(RULES_PATH, "utf8"),
       },
     });
@@ -352,6 +370,71 @@ describe("Firestore Security Rules for MangaReader", () => {
         ),
       ).resolves.toBeDefined();
     });
+
+    it("allows owner to delete their library entry using deleteDoc", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), "users/userA/library/manga-to-delete"), {
+          mediaId: "manga-to-delete",
+          title: "Delete Candidate",
+          status: "reading",
+          updatedAt: now,
+        });
+      });
+
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const libRef = doc(userA, "users/userA/library/manga-to-delete");
+
+      await expect(assertSucceeds(deleteDoc(libRef))).resolves.toBeUndefined();
+    });
+
+    it("prevents User B from deleting User A's library entry using deleteDoc", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), "users/userA/library/manga-protected"), {
+          mediaId: "manga-protected",
+          title: "Protected Manga",
+          status: "reading",
+          updatedAt: now,
+        });
+      });
+
+      const userB = testEnv.authenticatedContext("userB").firestore();
+      const libRef = doc(userB, "users/userA/library/manga-protected");
+
+      await expect(assertFails(deleteDoc(libRef))).resolves.toBeDefined();
+    });
+
+    it("allows owner to delete documents across progress, readerModes, savedTitles, and sync subcollections", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, "users/userA/progress/prog-del"), {
+          seriesId: "prog-del",
+          updatedAt: now,
+        });
+        await setDoc(doc(db, "users/userA/readerModes/mode-del"), {
+          seriesId: "mode-del",
+          mode: "webtoon",
+          updatedAt: now,
+        });
+        await setDoc(doc(db, "users/userA/savedTitles/title-del"), {
+          mediaId: "title-del",
+          title: "To Be Deleted",
+          savedAt: now,
+        });
+        await setDoc(doc(db, "users/userA/sync/userData"), {
+          version: 3,
+          updatedAt: now,
+        });
+      });
+
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      await expect(assertSucceeds(deleteDoc(doc(userA, "users/userA/progress/prog-del")))).resolves.toBeUndefined();
+      await expect(assertSucceeds(deleteDoc(doc(userA, "users/userA/readerModes/mode-del")))).resolves.toBeUndefined();
+      await expect(assertSucceeds(deleteDoc(doc(userA, "users/userA/savedTitles/title-del")))).resolves.toBeUndefined();
+      await expect(assertSucceeds(deleteDoc(doc(userA, "users/userA/sync/userData")))).resolves.toBeUndefined();
+    });
   });
 
   // -------------------------------------------------------------
@@ -538,6 +621,107 @@ describe("Firestore Security Rules for MangaReader", () => {
           setDoc(syncRef, {
             version: 3,
             updatedAt: new Date().toISOString(),
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("allows writing revision, syncStatus, syncSessionId, and tombstones to userData", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertSucceeds(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            revision: 10,
+            syncStatus: "ready",
+            syncSessionId: "session-uuid-12345",
+            tombstones: {
+              "series-deleted-1": new Date().toISOString(),
+            },
+            library: {},
+            progress: {},
+            readerModes: {},
+            savedTitles: {},
+            seeded: true,
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it("allows syncStatus 'syncing' and revision 0", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertSucceeds(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            revision: 0,
+            syncStatus: "syncing",
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it("rejects invalid syncStatus enum value", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            syncStatus: "corrupted_status",
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects negative revision number", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            revision: -5,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects syncSessionId longer than 100 characters", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            syncSessionId: "a".repeat(101),
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects tombstones field when not a map", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            tombstones: ["series-1", "series-2"], // array instead of map
           }),
         ),
       ).resolves.toBeDefined();
