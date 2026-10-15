@@ -31,12 +31,15 @@ describe("source discovery", () => {
     expect(officialDestinations({ ...series, type: "manga" })).toEqual([]);
     expect(officialDestinations({ ...series, title: "Another Academy Hero" })).toEqual([]);
   });
-  it("tries alternate titles but rejects ambiguous exact-ID results", async () => {
+  it("passes alternate titles to the server and rejects conflicting verified editions", async () => {
     const title = normalizeMedia({ id: 74347, title: { english: "One-Punch Man", romaji: "One Punch-Man" } }, "now")!;
-    const fetcher = vi.fn().mockResolvedValueOnce(json({ data: [] })).mockResolvedValueOnce(json({ data: [1, 2].map((id) => ({ id: uuid(id), attributes: { title: { en: "One Punch-Man" }, links: { al: "74347" } } })) }));
+    const fetcher = vi.fn(async (_url: string) => json({ status: "conflict", providerId: "mangadex", releases: [] }));
     vi.stubGlobal("fetch", fetcher);
-    await expect(mangaDexProvider.resolve(title)).rejects.toThrow("Multiple editions");
-    expect(String(fetcher.mock.calls[1]![0])).toContain("One+Punch-Man");
+    await expect(mangaDexProvider.resolve(title)).rejects.toThrow("Multiple or conflicting editions");
+    const url = String(fetcher.mock.calls[0]![0]);
+    expect(url).toContain("One-Punch+Man");
+    expect(url).toContain("One+Punch-Man");
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

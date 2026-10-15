@@ -141,10 +141,10 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
         return;
       }
       if (mode !== "paged-rtl") return;
-      if (e.key === "ArrowLeft" || (e.key === " " && !e.shiftKey)) {
+      if (e.key === "ArrowLeft" || (e.key === " " && !e.shiftKey) || e.key === "PageDown") {
         e.preventDefault();
         forward();
-      } else if (e.key === "ArrowRight" || (e.key === " " && e.shiftKey)) {
+      } else if (e.key === "ArrowRight" || (e.key === " " && e.shiftKey) || e.key === "PageUp") {
         e.preventDefault();
         back();
       }
@@ -335,6 +335,9 @@ function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onT
     <div
       ref={scroller}
       className="reader__scroll"
+      tabIndex={0}
+      role="region"
+      aria-label={`${series.title} ${formatChapterLabel(chapter)} continuous scroll`}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("a,button")) return;
         onTap();
@@ -390,6 +393,9 @@ function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }
   return (
     <div
       className="reader__paged"
+      tabIndex={0}
+      role="region"
+      aria-label={`${series.title} ${formatChapterLabel(chapter)} page ${pageForIndex(index, chapter.pageCount) + 1} of ${chapter.pageCount}`}
       onTouchStart={(e) => {
         const t = e.touches[0];
         touch.current = t ? { x: t.clientX, y: t.clientY } : null;

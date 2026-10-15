@@ -59,6 +59,13 @@ describe("Reader · paged right-to-left (manga)", () => {
     expect(chapterProgress(r, manga, 1)?.page).toBe(1);
   });
 
+  it("supports keyboard navigation with PageDown and PageUp keys", async () => {
+    const user = userEvent.setup();
+    const r = renderWithApp(<ReaderView series={manga} chapterId={c1.id} />, emptyUserData());
+    await user.keyboard("{PageDown}{PageDown}{PageUp}");
+    expect(chapterProgress(r, manga, 1)?.page).toBe(1);
+  });
+
   it("turns pages with swipes: right = next, left = back, mostly-vertical swipes ignored", () => {
     const r = renderWithApp(<ReaderView series={manga} chapterId={c1.id} />, emptyUserData());
     const surface = document.querySelector(".reader__paged")!;
@@ -424,5 +431,14 @@ describe("Reader · errors and setup", () => {
     const dropped = addToLibrary(emptyUserData(), manga.id, "2026-10-12T00:00:00Z", "dropped");
     const r = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, dropped);
     expect(r.store.getSnapshot()?.library[manga.id]?.status).toBe("reading");
+  });
+
+  it("exposes accessible region labels for keyboard and assistive navigation", () => {
+    const rPaged = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    expect(screen.getByRole("region", { name: /Neon Ronin.*page 1 of 16/i })).toBeInTheDocument();
+    rPaged.unmount();
+
+    renderWithApp(<ReaderView series={manhwa} chapterId={manhwa.chapters[0]!.id} />, emptyUserData());
+    expect(screen.getByRole("region", { name: /The Last Cartographer.*continuous scroll/i })).toBeInTheDocument();
   });
 });

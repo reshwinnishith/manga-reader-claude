@@ -139,23 +139,121 @@ export function getRecentlyAdded(catalog: Series[], data: UserData): Series[] {
 }
 
 export type LibraryFilter = "all" | ReadingStatus;
+export type LibraryTypeFilter = "all" | Series["type"];
+export type LibrarySort = "recent-active" | "recent-added" | "title-asc" | "title-desc" | "progress";
+
+/**
+ * Computes progress sort information for a series.
+ * Tier 3: Fully completed (100% chapter completion or marked Completed by user).
+ * Tier 2: In-progress with actual recorded reading activity (verified fraction > 0 or recorded chapter reads on external titles).
+ * Tier 1: Unread (0 progress, 0 chapters read, not completed).
+ */
+export function getSeriesProgressRank(series: Series, data: UserData): {
+  tier: number;
+  fraction: number;
+  chaptersReadCount: number;
+} {
+  const progress = data.progress[series.id];
+  const status = data.library[series.id]?.status;
+
+  // Catalog series with known chapters
+  if (series.chapters.length > 0) {
+    const fraction = getSeriesProgressFraction(series, progress);
+    const target = getResumeTarget(series, progress);
+    const isCompleted = status === "completed" || target?.kind === "reread" || fraction === 1;
+
+    if (isCompleted) {
+      return { tier: 3, fraction: 1, chaptersReadCount: series.chapters.length };
+    }
+
+    if (fraction > 0) {
+      const readCount = Object.values(progress?.chapters ?? {}).filter((c) => c.completed || c.page > 0).length;
+      return { tier: 2, fraction, chaptersReadCount: readCount };
+    }
+
+    return { tier: 1, fraction: 0, chaptersReadCount: 0 };
+  }
+
+  // External / AniList series (no catalog chapter manifest; do not fabricate percentage!)
+  if (status === "completed") {
+    return { tier: 3, fraction: 0, chaptersReadCount: 0 };
+  }
+
+  if (progress) {
+    const readCount = Object.values(progress.chapters ?? {}).filter((c) => c.completed || c.page > 0 || c.atEnd).length;
+    const hasActivity = readCount > 0 || Boolean(progress.lastChapterId);
+    if (hasActivity) {
+      return { tier: 2, fraction: 0, chaptersReadCount: Math.max(1, readCount) };
+    }
+  }
+
+  return { tier: 1, fraction: 0, chaptersReadCount: 0 };
+}
 
 export function filterLibrary(
   catalog: Series[],
   data: UserData,
-  filter: LibraryFilter,
-  query: string,
+  filter: LibraryFilter = "all",
+  query: string = "",
+  typeFilter: LibraryTypeFilter = "all",
+  sort: LibrarySort = "recent-active",
 ): Series[] {
   const q = query.trim().toLowerCase();
   return catalog
     .filter((s) => data.library[s.id])
     .filter((s) => filter === "all" || data.library[s.id]!.status === filter)
+    .filter((s) => typeFilter === "all" || s.type === typeFilter)
     .filter((s) => !q || matchesQuery(s, q))
     .sort((a, b) => {
-      // Most recently touched first, falling back to when it was added.
+      if (sort === "recent-added") {
+        const diff = data.library[b.id]!.addedAt.localeCompare(data.library[a.id]!.addedAt);
+        if (diff !== 0) return diff;
+        return a.title.localeCompare(b.title);
+      }
+      if (sort === "title-asc") {
+        const diff = a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+      }
+      if (sort === "title-desc") {
+        const diff = b.title.localeCompare(a.title, undefined, { sensitivity: "base" });
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+      }
+      if (sort === "progress") {
+        const ra = getSeriesProgressRank(a, data);
+        const rb = getSeriesProgressRank(b, data);
+
+        // 1. Higher tier ranks first (Tier 3: Completed > Tier 2: In-Progress > Tier 1: Unread)
+        if (rb.tier !== ra.tier) {
+          return rb.tier - ra.tier;
+        }
+
+        // 2. Within Tier 2 (In-Progress):
+        if (ra.tier === 2 && rb.tier === 2) {
+          if (ra.fraction > 0 && rb.fraction > 0 && rb.fraction !== ra.fraction) {
+            return rb.fraction - ra.fraction;
+          }
+          if (rb.chaptersReadCount !== ra.chaptersReadCount) {
+            return rb.chaptersReadCount - ra.chaptersReadCount;
+          }
+        }
+
+        // 3. Fallback to most recent activity timestamp (or date added)
+        const ta = data.progress[a.id]?.updatedAt ?? data.library[a.id]!.addedAt;
+        const tb = data.progress[b.id]?.updatedAt ?? data.library[b.id]!.addedAt;
+        const diff = tb.localeCompare(ta);
+        if (diff !== 0) return diff;
+
+        // 4. Deterministic tiebreaker
+        return a.title.localeCompare(b.title);
+      }
+      // "recent-active" default
       const ta = data.progress[a.id]?.updatedAt ?? data.library[a.id]!.addedAt;
       const tb = data.progress[b.id]?.updatedAt ?? data.library[b.id]!.addedAt;
-      return tb.localeCompare(ta);
+      const diff = tb.localeCompare(ta);
+      if (diff !== 0) return diff;
+      return a.title.localeCompare(b.title);
     });
 }
 

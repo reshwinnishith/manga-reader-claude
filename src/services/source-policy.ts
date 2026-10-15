@@ -10,12 +10,18 @@
  * conflict, even if MyAnimeList agrees). Titles and author names never prove
  * identity.
  *
- * Rights: MangaDex records an official English publication in `links.engtl`.
- * When one exists, unofficial English uploads are not shown for in-app
- * reading; the official destination is offered instead. Uploads without a
- * credited group are never readable: MangaDex's acceptable-use policy requires
- * crediting the group, and anonymous uploads include notices rather than
- * chapters. Official publisher groups (`official: true`) remain readable.
+ * Rights: in-app page access is DENIED BY DEFAULT. A release is readable only
+ * when a reviewed entry in READING_PERMISSIONS affirmatively covers its edition
+ * (and, if the entry names groups, its group). Nothing else grants access:
+ * missing licensing metadata, a MangaDex upload group (named, "official" or
+ * anonymous), an image endpoint that happens to respond, or official publisher
+ * chapters appearing in the same feed are NOT evidence of permission. See
+ * docs/source-permissions.md. Official publisher links are always preserved.
+ *
+ * Restrictions that apply even when a permission exists: external-only or
+ * unavailable releases, uploads with no credited group (attribution is a
+ * condition of use, never a grant), and English fan uploads of an edition the
+ * catalogue records as officially licensed in English (`links.engtl`).
  */
 
 export type VerifiedBy = "anilist" | "myanimelist";
@@ -65,7 +71,64 @@ export function officialEnglishLinks(links: SourceLinks): OfficialLink[] {
   return [{ label: `Official English release (${host})`, url }];
 }
 
-export type Restriction = "licensed-in-english" | "uncredited" | "external" | "unavailable";
+export type Restriction = "licensed-in-english" | "uncredited" | "external" | "unavailable" | "not-permitted";
+
+export type PermissionBasis = "publisher-license" | "rights-holder-consent" | "public-domain";
+
+/**
+ * A reviewed grant for in-app page access. Entries are data, added only after a
+ * human has documented permission compatible with MangaReader's use (personal,
+ * non-commercial, no offline copies). `evidenceUrl` must point at that record.
+ */
+export interface ReadingPermission {
+  providerId: "mangadex";
+  /** The exact source edition this grant covers. */
+  mangaId: string;
+  /** Optional: restrict the grant to these credited groups (case-insensitive). */
+  groups?: readonly string[];
+  basis: PermissionBasis;
+  evidenceUrl: string;
+  reviewedBy: string;
+  /** ISO date of the review. */
+  reviewedAt: string;
+  /** ISO date after which the grant no longer applies. */
+  expiresAt?: string;
+}
+
+/**
+ * Reviewed grants. EMPTY: no source has been verified as permitting in-app
+ * reading. Do not add an entry because a chapter endpoint returns images; see
+ * docs/source-permissions.md for what an entry requires.
+ */
+export const READING_PERMISSIONS: readonly ReadingPermission[] = [];
+
+/** An entry that is missing evidence or review details never grants anything. */
+export function isValidPermission(entry: ReadingPermission, now = Date.now()): boolean {
+  if (entry.providerId !== "mangadex" || !MANGADEX_UUID.test(entry.mangaId)) return false;
+  if (!["publisher-license", "rights-holder-consent", "public-domain"].includes(entry.basis)) return false;
+  if (!safeHttpsUrl(entry.evidenceUrl) || !entry.reviewedBy?.trim()) return false;
+  const reviewed = Date.parse(entry.reviewedAt);
+  if (!Number.isFinite(reviewed) || reviewed > now) return false;
+  if (entry.expiresAt !== undefined) {
+    const expires = Date.parse(entry.expiresAt);
+    if (!Number.isFinite(expires) || expires <= now) return false;
+  }
+  if (entry.groups !== undefined && (entry.groups.length === 0 || entry.groups.some((g) => !g.trim()))) return false;
+  return true;
+}
+
+/** Every valid grant for this edition (a release is checked against each). */
+export function permissionsFor(mangaId: string, registry: readonly ReadingPermission[] = READING_PERMISSIONS, now = Date.now()): ReadingPermission[] {
+  return registry.filter((entry) => entry.mangaId.toLowerCase() === mangaId.toLowerCase() && isValidPermission(entry, now));
+}
+
+function permits(grants: readonly ReadingPermission[], release: ReleaseRecord): boolean {
+  return grants.some((grant) => {
+    if (!grant.groups) return true;
+    const allowed = grant.groups.map((g) => g.trim().toLowerCase());
+    return release.groups.some((g) => allowed.includes(g.name.trim().toLowerCase()));
+  });
+}
 
 export interface ReleaseGroup {
   name: string;
@@ -90,13 +153,16 @@ export interface ReleaseAccess {
   restriction?: Restriction;
 }
 
-export function classifyRelease(release: ReleaseRecord, context: { licensedInEnglish: boolean }): ReleaseAccess {
+export function classifyRelease(release: ReleaseRecord, context: { licensedInEnglish: boolean; grants?: readonly ReadingPermission[] }): ReleaseAccess {
   if (release.externalUrl) return { readable: false, restriction: "external" };
   if (release.isUnavailable || !(release.pages > 0)) return { readable: false, restriction: "unavailable" };
   if (!release.groups.some((g) => g.name.trim())) return { readable: false, restriction: "uncredited" };
-  if (context.licensedInEnglish && release.language === "en" && !release.groups.some((g) => g.official)) {
+  if (context.licensedInEnglish && release.language === "en") {
     return { readable: false, restriction: "licensed-in-english" };
   }
+  // Default deny: only an affirmative, reviewed grant for this edition (and
+  // group, if the grant names any) makes a release readable in-app.
+  if (!permits(context.grants ?? [], release)) return { readable: false, restriction: "not-permitted" };
   return { readable: true };
 }
 
