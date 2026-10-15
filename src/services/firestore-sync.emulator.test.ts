@@ -1,0 +1,173 @@
+// @vitest-environment node
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "firebase/compat/app";
+import "firebase/compat/firestore";
+import { assertFails, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
+import { deleteDoc, doc, getDoc } from "firebase/firestore";
+import type { Firestore } from "firebase/firestore";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { Socket } from "node:net";
+import { library } from "@/test/sync-fixtures";
+import {
+  FirestoreSyncService,
+  RemoteDataUnrecoverableError,
+  canonicalStringify,
+  loadRemoteState,
+  pruneObsoleteSnapshots,
+  readVerifiedSnapshot,
+} from "./firestore-sync";
+
+/**
+ * The real sync code against the real Firestore emulator WITH the security rules
+ * enforced, so a mismatch between what the client writes and what the rules accept
+ * fails here. Skipped (loudly) without an emulator; fails instead when
+ * REQUIRE_FIRESTORE_EMULATOR=true (CI). Run with `npm run test:rules`.
+ */
+const USER = { uid: "userA", isAnonymous: true, metadata: { creationTime: "2026-01-01T00:00:00.000Z" } };
+const portOpen = (port: number, host: string) =>
+  new Promise<boolean>((done) => {
+    const socket = new Socket();
+    socket.setTimeout(400);
+    socket.once("connect", () => { socket.destroy(); done(true); });
+    socket.once("timeout", () => { socket.destroy(); done(false); });
+    socket.once("error", () => { socket.destroy(); done(false); });
+    socket.connect(port, host);
+  });
+
+describe("sync client against the Firestore rules (real emulator)", () => {
+  let env!: RulesTestEnvironment;
+  let available = false;
+  let db: Firestore;
+  let service: FirestoreSyncService;
+  const snapshotIds = async () => {
+    let ids: string[] = [];
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const { collection, getDocs } = await import("firebase/firestore");
+      ids = (await getDocs(collection(ctx.firestore() as unknown as Firestore, "users/userA/snapshots"))).docs.map((d) => d.id);
+    });
+    return ids;
+  };
+  const admin = (fn: (adminDb: Firestore) => Promise<void>) => env.withSecurityRulesDisabled(async (ctx) => fn(ctx.firestore() as unknown as Firestore));
+
+  beforeAll(async () => {
+    const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":") as [string, string];
+    available = await portOpen(Number(port), host);
+    if (!available) {
+      if (process.env.REQUIRE_FIRESTORE_EMULATOR === "true") throw new Error("REQUIRE_FIRESTORE_EMULATOR is set but no Firestore emulator is reachable.");
+      console.warn("Firestore emulator not reachable: SKIPPING the sync-vs-rules integration tests (run `npm run test:rules`).");
+      return;
+    }
+    env = await initializeTestEnvironment({ projectId: "demo-manga-reader-sync", firestore: { host, port: Number(port), rules: readFileSync(resolve(process.cwd(), "firestore.rules"), "utf8") } });
+  });
+  afterAll(async () => { await env?.cleanup(); });
+  beforeEach(async (context) => {
+    if (!available) return context.skip();
+    await env.clearFirestore();
+    db = env.authenticatedContext("userA").firestore() as unknown as Firestore;
+    service = new FirestoreSyncService();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  it("publishes successive revisions that the rules accept, and the result verifies", async () => {
+    for (let i = 1; i <= 3; i++) await service.atomicSyncOrPush(db, USER, library(i));
+    const state = await loadRemoteState(db, USER);
+    expect(Object.keys(state.data!.library)).toHaveLength(3);
+    expect(state.revision).toBe(3);
+    expect((await getDoc(doc(db, "users/userA/sync/userData"))).data()).toMatchObject({ revision: 3, snapshotParts: 1 });
+    expect((await getDoc(doc(db, "users/userA"))).data()).toMatchObject({ uid: "userA", anonymous: true });
+  });
+
+  it("publishes a large multi-part library that the rules accept (parts first, parent after, pointer last)", async () => {
+    const merged = await service.atomicSyncOrPush(db, USER, library(900, 0, 3000));
+    expect(Object.keys(merged.library)).toHaveLength(900);
+    const pointer = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!;
+    expect(pointer.snapshotParts).toBeGreaterThan(2);
+    const verified = await readVerifiedSnapshot(db, USER, pointer.activeSnapshotId as string, { checksum: pointer.snapshotChecksum as string, parts: pointer.snapshotParts as number });
+    expect(Object.keys(verified.data.savedTitles)).toHaveLength(900);
+  }, 60_000);
+
+  it("prunes old snapshots and their parts under the rules, never touching the active one", async () => {
+    await service.atomicSyncOrPush(db, USER, library(900, 0, 3000)); // revision 1, multi-part
+    for (let i = 2; i <= 6; i++) await service.atomicSyncOrPush(db, USER, library(i));
+    await new Promise((resolve) => setTimeout(resolve, 1500)); // background pruning
+    const remaining = await snapshotIds();
+    expect(remaining.length).toBeLessThanOrEqual(4);
+    // Every later revision still carries the 900 titles, so retained snapshots keep their parts;
+    // what must not exist is a part whose snapshot was pruned.
+    const partParents: string[] = [];
+    await admin(async (adminDb) => {
+      const { collectionGroup, getDocs } = await import("firebase/firestore");
+      for (const d of (await getDocs(collectionGroup(adminDb, "parts"))).docs) partParents.push(d.ref.parent.parent!.id);
+    });
+    expect(partParents.length).toBeGreaterThan(0);
+    for (const parent of partParents) expect(remaining).toContain(parent); // no orphaned parts
+    const pointer = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!;
+    expect(remaining).toContain(pointer.activeSnapshotId);
+    await readVerifiedSnapshot(db, USER, pointer.activeSnapshotId as string);
+  }, 60_000);
+
+  it("the rules refuse to delete the active snapshot even if the client tried", async () => {
+    await service.atomicSyncOrPush(db, USER, library(2));
+    const active = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!.activeSnapshotId as string;
+    await expect(assertFails(deleteDoc(doc(db, `users/userA/snapshots/${active}`)))).resolves.toBeDefined();
+    expect(await pruneObsoleteSnapshots(db, USER, 99, active)).toBeGreaterThanOrEqual(0);
+    expect((await getDoc(doc(db, `users/userA/snapshots/${active}`))).exists()).toBe(true);
+  });
+
+  it("two devices publishing at once both land under real transaction semantics", async () => {
+    const other = new FirestoreSyncService();
+    const [a, b] = await Promise.all([service.atomicSyncOrPush(db, USER, library(3, 0)), other.atomicSyncOrPush(db, USER, library(3, 100))]);
+    expect(Object.keys(a.library).length + Object.keys(b.library).length).toBeGreaterThanOrEqual(9);
+    const state = await loadRemoteState(db, USER);
+    expect(Object.keys(state.data!.library)).toHaveLength(6);
+    expect(state.revision).toBe(2);
+    expect(await snapshotIds()).toHaveLength(2); // the loser's staged snapshot was removed
+  }, 60_000);
+
+  it("recovers from a corrupted active snapshot and heals it with a new valid revision", async () => {
+    await service.atomicSyncOrPush(db, USER, library(2));
+    await service.atomicSyncOrPush(db, USER, library(4));
+    const active = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!.activeSnapshotId as string;
+    await admin(async (adminDb) => {
+      const { updateDoc } = await import("firebase/firestore");
+      await updateDoc(doc(adminDb, `users/userA/snapshots/${active}`), { "library.al-0.status": "dropped" });
+    });
+    const state = await loadRemoteState(db, USER);
+    expect(state.recoveredFrom).toBeDefined();
+    expect(Object.keys(state.data!.library)).toHaveLength(2);
+    const healed = await service.atomicSyncOrPush(db, USER, library(5, 50));
+    expect(Object.keys(healed.library)).toHaveLength(7);
+    const after = await loadRemoteState(db, USER);
+    expect(after.recoveredFrom).toBeUndefined();
+    expect(after.revision).toBe(3);
+  });
+
+  it("refuses, writes nothing and keeps local data when every snapshot is corrupt", async () => {
+    await service.atomicSyncOrPush(db, USER, library(2));
+    for (const id of await snapshotIds()) {
+      await admin(async (adminDb) => {
+        const { updateDoc } = await import("firebase/firestore");
+        await updateDoc(doc(adminDb, `users/userA/snapshots/${id}`), { checksum: "0".repeat(64) });
+      });
+    }
+    const before = canonicalStringify(await snapshotIds());
+    const local = library(3, 70);
+    await expect(service.atomicSyncOrPush(db, USER, local)).rejects.toBeInstanceOf(RemoteDataUnrecoverableError);
+    expect(canonicalStringify(await snapshotIds())).toBe(before);
+    expect((await getDoc(doc(db, "users/userA/sync/userData"))).data()!.revision).toBe(1);
+  });
+
+  it("the optional per-collection copies still satisfy the rules when enabled", async () => {
+    const data = library(3);
+    data.readerModes["al-0"] = "paged-rtl";
+    data.readerModeTimes = { "al-0": "2026-10-01T00:00:00.000Z" };
+    data.tombstones = { "al-9": "2026-10-01T00:00:00.000Z" };
+    await service.atomicSyncOrPush(db, USER, data);
+    const id = (service as unknown as { currentReconciliationId: number }).currentReconciliationId;
+    await service.reconcileSubcollections(db, USER, id, 1, data);
+    for (const path of ["users/userA/library/al-0", "users/userA/progress/al-0", "users/userA/readerModes/al-0", "users/userA/savedTitles/al-0"]) {
+      expect((await getDoc(doc(db, path))).exists(), path).toBe(true);
+    }
+  });
+});
