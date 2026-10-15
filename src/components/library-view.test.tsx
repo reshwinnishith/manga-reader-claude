@@ -113,6 +113,24 @@ describe("LibraryView · progress presentation", () => {
     expect(within(grid).getAllByText(/Not started · \d+ ch/)).toHaveLength(2);
   });
 
+  it("keeps user-set Completed status distinct from verified 100% chapter completion without 0% label", () => {
+    let data = emptyUserData();
+    data = {
+      ...data,
+      library: {
+        "skyward-lanterns": { seriesId: "skyward-lanterns", status: "completed", addedAt: NOW },
+      },
+      progress: {},
+    };
+    renderWithApp(<LibraryView />, data);
+    const grid = screen.getByRole("list", { name: "Library" });
+    const skywardLink = within(grid).getByRole("link", { name: "Open Skyward Lanterns" });
+
+    // Displays clean "Completed", never "Completed · 0%"
+    expect(within(skywardLink).getByText("Completed")).toBeInTheDocument();
+    expect(within(skywardLink).queryByText(/0%/)).toBeNull();
+  });
+
   it("does not invent chapter counts or percentages for external AniList titles without verified chapters", () => {
     let data = emptyUserData();
     data = {

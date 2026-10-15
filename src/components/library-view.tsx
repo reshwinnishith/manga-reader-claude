@@ -62,8 +62,11 @@ export function getProgressLabel(
     const pct = Math.round(fraction * 100);
     const target = getResumeTarget(series, progress);
 
-    if (status === "completed" || target?.kind === "reread" || pct === 100) {
-      return { label: `Completed · ${pct}%`, state: "completed" };
+    if (target?.kind === "reread" || pct === 100) {
+      return { label: "Completed · 100%", state: "completed" };
+    }
+    if (status === "completed") {
+      return { label: "Completed", state: "completed" };
     }
     if (progress && target && pct > 0) {
       return {
