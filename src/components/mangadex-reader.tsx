@@ -5,7 +5,7 @@ import { PersistenceNotice } from "./persistence-notice";
 import { useEffect, useRef, useState } from "react";
 import { useUserData } from "@/state/use-user-data";
 import { seriesFromSaved } from "@/lib/series-from-saved";
-import { selectChapters, type MangaDexChapter } from "@/services/mangadex";
+import { readerNeighbors, type MangaDexChapter } from "@/services/mangadex";
 import { editionChapters, readerUrl } from "@/services/reading-sources";
 
 type ChapterInfo = { pageCount: number; seriesId: string; number: string; group: string; mangaId: string };
@@ -92,7 +92,7 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
     const controller = new AbortController();
     // Same classified release feed as the chapter list (licensed/uncredited withheld).
     editionChapters(info.mangaId, controller.signal).then((result) => {
-      if (!controller.signal.aborted) setChapters(selectChapters(result, [id]));
+      if (!controller.signal.aborted) setChapters(result);
     }).catch(() => { if (!controller.signal.aborted) setNavigationError("Chapter navigation unavailable. Return to Chapters to retry."); });
     return () => controller.abort();
   }, [info.mangaId, id]);
@@ -124,10 +124,8 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
     actions.recordProgress({ ...base, status: "ongoing", chapters: [{ id, number: Number(info.number) || 0, title: info.number ? `Chapter ${info.number}` : "Special", pageCount: info.pageCount, releasedAt: "" }] }, id, page, atEnd);
   }, [actions, saved, id, info.number, info.pageCount, page, atEnd, ready]);
   const markReady = (index: number) => setReady((previous) => previous.has(index) ? previous : new Set(previous).add(index));
-  const index = chapters.findIndex((c) => c.id === id);
-  const previous = index > 0 ? chapters[index - 1] : undefined;
-  const next = index >= 0 ? chapters[index + 1] : undefined;
-  const chapterLink = (chapter: MangaDexChapter, label: string) => chapter.readable ? <Link className="btn btn--secondary" href={readerUrl(chapter, info.seriesId)}>{label}</Link> : chapter.externalUrl ? <a className="btn btn--secondary" href={chapter.externalUrl} target="_blank" rel="noopener noreferrer">{label} ↗</a> : <span>{label} · unavailable</span>;
+  const { previous, next } = readerNeighbors(chapters, id);
+  const chapterLink = (chapter: MangaDexChapter, label: string) => <Link className="btn btn--secondary" href={readerUrl(chapter, info.seriesId)}>{label}</Link>;
   return <>
     <div className="source-reader__toolbar"><span aria-live="polite">Page {page + 1} / {info.pageCount}</span><button className="btn btn--secondary" onClick={() => {
       const nextMode = mode === "scroll" ? "paged" : "scroll";

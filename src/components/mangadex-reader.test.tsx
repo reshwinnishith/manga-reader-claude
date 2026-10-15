@@ -109,3 +109,52 @@ it("shows removed chapter errors and supports a successful retry", async () => {
   await userEvent.setup().click(screen.getByRole("button", { name: "Retry chapter" }));
   await waitFor(() => expect(screen.getByRole("img", { name: "Page 1" })).toBeInTheDocument());
 });
+
+it("skips external-only and withheld chapters in previous/next, listing no link-outs", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ pageCount: 3, seriesId: title.id, number: "1", group: "Test team", mangaId });
+    if (url.includes("/api/sources/mangadex")) return response({ releases: [
+      release(id, "1"),
+      release("12345678-1234-4123-8123-123456789010", "2", { readable: false, restriction: "external", externalUrl: "https://publisher.example/2", groups: ["Publisher"] }),
+      release("12345678-1234-4123-8123-123456789011", "3", { readable: false, restriction: "unavailable" }),
+      release(second, "4"),
+    ] });
+    return response({ error: "unexpected" }, 500);
+  }));
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  expect(await screen.findByRole("link", { name: "Chapter 4 →" })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${second}`));
+  expect(screen.queryByRole("link", { name: /publisher|↗/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/unavailable/)).not.toBeInTheDocument();
+  expect(document.querySelector('a[href^="https://publisher.example"]')).toBeNull();
+});
+
+it("shows one next link when two groups uploaded the same chapter", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ pageCount: 3, seriesId: title.id, number: "1", group: "Test team", mangaId });
+    if (url.includes("/api/sources/mangadex")) return response({ releases: [
+      release(id, "1"), release("12345678-1234-4123-8123-123456789020", "1", { groups: ["Other team"], publishedAt: "2027-01-01" }),
+      release(second, "2"), release("12345678-1234-4123-8123-123456789021", "2", { groups: ["Other team"], publishedAt: "2027-01-01" }),
+    ] });
+    return response({ error: "unexpected" }, 500);
+  }));
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  expect(await screen.findByRole("link", { name: "Chapter 2 →" })).toHaveAttribute("href", expect.stringContaining("/mangadex/read/12345678-1234-4123-8123-123456789021"));
+  expect(screen.queryByRole("link", { name: /Chapter 1/ })).not.toBeInTheDocument(); // no repeat of the chapter being read
+  expect(screen.getAllByRole("link", { name: /Chapter \d →/ })).toHaveLength(1);
+});
+
+it("fails safely on a disallowed chapter URL: no pages requested and no progress saved", async () => {
+  const fetcher = vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ error: "In-app reading isn't enabled for this title. Use the official link on the title page, if one is listed." }, 502);
+    return response({ releases: [] });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  expect(await screen.findByRole("alert")).toHaveTextContent("isn't enabled");
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Finish chapter" })).not.toBeInTheDocument();
+  expect(fetcher.mock.calls.some(([url]) => String(url).includes("/api/mangadex/page/"))).toBe(false);
+  expect(fetcher.mock.calls.some(([url]) => String(url).includes("/api/sources/mangadex"))).toBe(false); // navigation feed only loads for an allowed chapter
+  expect(store.getSnapshot()?.progress).toEqual({});
+  expect(store.getSnapshot()?.library[title.id]?.status).not.toBe("reading");
+});

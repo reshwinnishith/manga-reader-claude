@@ -1,12 +1,13 @@
 import { MANGADEX_ID } from "./mangadex-pages";
 import { anilistByMalId, getManga } from "./mangadex-server";
-import { classifyRelease, officialEnglishLinks, parseReleaseRecord } from "./source-policy";
+import { classifyRelease, officialEnglishLinks, parseReleaseRecord, permissionsFor, type ReadingPermission } from "./source-policy";
 
 const RESTRICTION_MESSAGE = {
   "licensed-in-english": "This title has an official English release, so fan uploads aren't shown here. Use the official link on the title page.",
   uncredited: "This upload doesn't credit a translation group, so it isn't shown in MangaReader.",
   external: "This chapter is only available at its source.",
   unavailable: "This chapter's pages are unavailable.",
+  "not-permitted": "In-app reading isn't enabled for this title. Use the official link on the title page, if one is listed.",
 } as const;
 
 /**
@@ -14,7 +15,7 @@ const RESTRICTION_MESSAGE = {
  * parameters. The same rules as the chapter list apply, so a hidden release
  * cannot be opened by URL.
  */
-export async function chapterIdentity(id: string, fetchImpl: typeof fetch = fetch) {
+export async function chapterIdentity(id: string, fetchImpl: typeof fetch = fetch, permissions?: readonly ReadingPermission[]) {
   if (!MANGADEX_ID.test(id)) throw new Error("Invalid chapter ID");
   const response = await fetchImpl(`https://api.mangadex.org/chapter/${id}?includes[]=scanlation_group`, { cache: "no-store", signal: AbortSignal.timeout(12000) });
   if (!response.ok) throw new Error(response.status === 404 ? "This chapter has been removed or is unavailable." : "Could not verify chapter identity.");
@@ -23,7 +24,7 @@ export async function chapterIdentity(id: string, fetchImpl: typeof fetch = fetc
   const mangaId = data?.relationships?.find((r: { type: string }) => r.type === "manga")?.id;
   if (!release || release.id !== id || !MANGADEX_ID.test(mangaId || "")) throw new Error("Could not verify chapter identity.");
   const manga = await getManga(mangaId, fetchImpl);
-  const access = classifyRelease(release, { licensedInEnglish: officialEnglishLinks(manga.links).length > 0 });
+  const access = classifyRelease(release, { licensedInEnglish: officialEnglishLinks(manga.links).length > 0, grants: permissionsFor(mangaId, permissions) });
   if (!access.readable) throw new Error(RESTRICTION_MESSAGE[access.restriction ?? "unavailable"]);
 
   let seriesId = "";
@@ -41,4 +42,22 @@ export async function chapterIdentity(id: string, fetchImpl: typeof fetch = fetc
     number: release.number,
     group: release.groups.map((g) => g.name).join(", "),
   };
+}
+
+const allowed = new Map<string, number>();
+const ALLOWED_MS = 5 * 60_000;
+
+/**
+ * Gate for every route that returns chapter content. The image route is hit once
+ * per page, so a successful check is remembered briefly; a refusal is never cached
+ * as success and always throws, so no manifest or image is requested for it.
+ */
+export async function assertChapterReadable(id: string, fetchImpl: typeof fetch = fetch, permissions?: readonly ReadingPermission[]): Promise<void> {
+  const seen = permissions === undefined ? allowed.get(id) : undefined;
+  if (seen !== undefined && Date.now() - seen < ALLOWED_MS) return;
+  await chapterIdentity(id, fetchImpl, permissions);
+  if (permissions === undefined) {
+    if (allowed.size > 200) allowed.clear();
+    allowed.set(id, Date.now());
+  }
 }

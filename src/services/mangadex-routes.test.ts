@@ -2,8 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { GET } from "@/app/api/mangadex/discover/route";
 import { chapterIdentity } from "./mangadex-chapter";
+import type { ReadingPermission } from "./source-policy";
 const id = "1369226a-5c75-4bbf-b385-d884228a9cfe";
 const mangaId = "d8a959f7-648e-4c8d-8f23-f1f3f8e129f3";
+const grant: ReadingPermission = { providerId: "mangadex", mangaId, basis: "publisher-license", evidenceUrl: "https://example.com/permission-record", reviewedBy: "test reviewer", reviewedAt: "2026-01-01" };
 const json = (body: unknown) => new Response(JSON.stringify(body));
 afterEach(() => vi.unstubAllGlobals());
 it("includes suggestive non-adult editions in discovery, which is required for Murata's OPM", async () => {
@@ -20,7 +22,7 @@ it("rejects invalid offsets without an upstream request", async () => {
 });
 it("gets chapter identity and credits from the source, including a chapter zero", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json({ data: { id, attributes: { chapter: "0", pages: 12, translatedLanguage: "en" }, relationships: [{ type: "manga", id: mangaId }, { type: "scanlation_group", attributes: { name: "Real team" } }] } })).mockResolvedValueOnce(json({ data: { id: mangaId, attributes: { title: { en: "One-Punch Man" }, links: { al: "74347" } } } })));
-  expect(await chapterIdentity(id)).toMatchObject({ seriesId: "al-74347", number: "0", group: "Real team", mangaId });
+  expect(await chapterIdentity(id, fetch, [grant])).toMatchObject({ seriesId: "al-74347", number: "0", group: "Real team", mangaId });
 });
 it("rejects external-only chapters before attempting a page manifest", async () => {
   const fetcher = vi.fn(async () => json({ data: { id, attributes: { externalUrl: "https://publisher.example/chapter" }, relationships: [{ type: "manga", id: mangaId }] } }));
