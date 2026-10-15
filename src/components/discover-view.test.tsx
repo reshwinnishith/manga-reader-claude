@@ -33,11 +33,30 @@ const type = async (text: string) => {
 const user = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
 describe("Discover · search flow", () => {
-  it("starts idle: sample titles, a hint, and no API call", () => {
+  it("starts idle: no demo titles, a hint, and no API call", () => {
     const { client, search } = fakeClient();
     renderWithApp(<DiscoverView client={client} />, emptyUserData());
     expect(screen.getByText("Type a title to search AniList.")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Sample titles/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Sample titles/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Neon Ronin")).not.toBeInTheDocument();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("shows only saved real titles at rest and filters by manga type", async () => {
+    const { client, search } = fakeClient();
+    const base = emptyUserData();
+    const saved = { ...base, savedTitles: { [moon.id]: moon, [tap.id]: tap }, library: {
+      [moon.id]: { seriesId: moon.id, status: "planned" as const, addedAt: NOW },
+      [tap.id]: { seriesId: tap.id, status: "reading" as const, addedAt: NOW },
+    } };
+    renderWithApp(<DiscoverView client={client} />, saved);
+    const list = screen.getByRole("list", { name: "Saved titles" });
+    expect(within(list).getByText("Moonlit Pharmacy (Fixture)")).toBeInTheDocument();
+    expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
+    expect(screen.queryByText("Neon Ronin")).not.toBeInTheDocument();
+    await user().click(screen.getByRole("button", { name: "Manhwa" });
+    expect(within(list).queryByText("Moonlit Pharmacy (Fixture)")).not.toBeInTheDocument();
+    expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
     expect(search).not.toHaveBeenCalled();
   });
 
@@ -55,7 +74,7 @@ describe("Discover · search flow", () => {
     expect(screen.queryByRole("list", { name: "Searching" })).not.toBeInTheDocument();
   });
 
-  it("does not search below the minimum length and keeps the demo samples", async () => {
+  it("does not search below the minimum length", async () => {
     const { client, search } = fakeClient();
     renderWithApp(<DiscoverView client={client} />, emptyUserData());
     await type("m");
