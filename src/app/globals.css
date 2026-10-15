@@ -372,6 +372,34 @@ html.reader-open, html.reader-open body { overflow: hidden; overscroll-behavior:
 .notice { padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 14px; }
 .section-note { margin-top: 20px; }
 
+/* ---------- Browse sections (Discover idle) ---------- */
+.browse-section { margin-top: 28px; }
+.browse-section__source {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); padding: 3px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+
+/* Shelf card — compact card for horizontal shelves */
+.shelf-card { text-decoration: none; display: flex; flex-direction: column; gap: 3px; min-width: 0; position: relative; }
+.shelf-card .card__cover { border-radius: 12px; margin-bottom: 0; box-shadow: 0 4px 14px rgba(0,0,0,0.35); transition: transform 0.18s ease, box-shadow 0.18s ease; }
+.shelf-card:hover .card__cover, .shelf-card:active .card__cover { transform: scale(0.97); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+.shelf-card .card__title { font-size: 13px; font-weight: 650; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.shelf-card .card__caption { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shelf-card .card__badge { position: absolute; top: 8px; left: 8px; z-index: 1; }
+
+/* Save button within shelf card: sits below the cover, does not interfere with the Link */
+.shelf-card__save { margin-top: 4px; }
+.shelf-card__save .btn { width: 100%; min-height: 34px; font-size: 12px; padding: 0 8px; border-radius: 8px; }
+
+/* Inline error state for individual browse sections */
+.browse-section__error {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 14px;
+  background: var(--surface); border: 1px solid rgba(255, 107, 107, 0.25); color: var(--muted);
+}
+.browse-section__error-msg { flex: 1; font-size: 13px; min-width: 0; }
+
 /* Source reader: safe areas, stable placeholders and controls usable on iPhone. */
 .source-reader { min-height: 100dvh; background: #101015; color: #fff; padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); overflow-wrap: anywhere; }
 .source-reader a { color: inherit; }
