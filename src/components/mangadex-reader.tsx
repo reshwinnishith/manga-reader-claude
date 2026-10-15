@@ -151,10 +151,15 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
         for (const element of pages) {
           if (element.getBoundingClientRect().top <= window.innerHeight / 2) current = Number(element.dataset.page);
         }
+        const endEl = document.getElementById("source-reader-end");
+        if (endEl && endEl.getBoundingClientRect().top <= window.innerHeight) {
+          current = info.pageCount - 1;
+        }
         setPage(current);
         if (current < info.pageCount - 1) setAtEnd(false);
       });
     };
+    update();
     window.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
     return () => { cancelAnimationFrame(frame); window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
@@ -171,6 +176,8 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
   const { previous, next } = readerNeighbors(chapters, id);
   const chapterLink = (chapter: MangaDexChapter, label: string) => <Link className="btn btn--secondary" href={readerUrl(chapter, info.seriesId)}>{label}</Link>;
   const navLoaded = chapters.length > 0;
+  const reachedFinalPage = page === info.pageCount - 1;
+  const canFinish = reachedFinalPage && ready.has(info.pageCount - 1) && !atEnd;
 
   return <>
     <div className="source-reader__toolbar">
@@ -195,10 +202,18 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
     <div
       ref={content}
       onTouchStart={(event) => {
+        if ((event.target as HTMLElement)?.closest?.("button, a, input, textarea, select, label")) {
+          touch.current = null;
+          return;
+        }
         const point = event.touches.length === 1 ? event.touches[0] : undefined;
         touch.current = point ? { x: point.clientX, y: point.clientY } : null;
       }}
       onTouchEnd={(event) => {
+        if ((event.target as HTMLElement)?.closest?.("button, a, input, textarea, select, label")) {
+          touch.current = null;
+          return;
+        }
         const point = event.changedTouches[0], start = touch.current;
         touch.current = null;
         if (mode !== "paged" || !start || !point) return;
@@ -236,12 +251,18 @@ function LoadedReader({ id, info, data, actions }: { id: string; info: ChapterIn
         </button>
       </nav>
     )}
-    {(mode === "scroll" || page === info.pageCount - 1) && (
-      <div className="source-reader__end">
-        <button className="btn btn--primary" disabled={!ready.has(info.pageCount - 1) || atEnd} onClick={() => { setPage(info.pageCount - 1); setAtEnd(true); }}>
+    {(mode === "scroll" || reachedFinalPage) && (
+      <div id="source-reader-end" className="source-reader__end">
+        <button className="btn btn--primary" disabled={!canFinish} onClick={() => { setPage(info.pageCount - 1); setAtEnd(true); }}>
           {atEnd ? "Chapter finished" : "Finish chapter"}
         </button>
-        <p>{atEnd ? "Chapter complete." : "Mark finished after reading the final page."}</p>
+        <p>
+          {atEnd
+            ? "Chapter complete."
+            : !reachedFinalPage
+            ? "Scroll to the final page to complete this chapter."
+            : "Mark finished after reading the final page."}
+        </p>
         {atEnd && next && (
           <div className="source-reader__next-action">
             <Link className="btn btn--primary btn--large" href={readerUrl(next, info.seriesId)}>

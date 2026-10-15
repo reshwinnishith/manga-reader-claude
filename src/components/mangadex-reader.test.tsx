@@ -179,7 +179,9 @@ it("offers continue to next chapter upon finishing and allows retry when navigat
     return response({ error: "unexpected" }, 500);
   }));
 
-  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  const data = initial();
+  data.readerModes[title.id] = "paged-rtl";
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
   const first = await screen.findByRole("img", { name: "Page 1" });
   fireEvent.load(first);
 
@@ -190,9 +192,13 @@ it("offers continue to next chapter upon finishing and allows retry when navigat
 
   expect(await screen.findByRole("link", { name: "Chapter 2 →" })).toBeInTheDocument();
 
-  // Load last page and finish chapter
+  // Advance to final page in paged mode and load it
+  await user.click(screen.getByRole("button", { name: "Next page" }));
+  fireEvent.load(screen.getByRole("img", { name: "Page 2" }));
+  await user.click(screen.getByRole("button", { name: "Next page" }));
   const lastImg = screen.getByRole("img", { name: "Page 3" });
   fireEvent.load(lastImg);
+
   await user.click(screen.getByRole("button", { name: "Finish chapter" }));
 
   expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
@@ -219,6 +225,79 @@ it("supports tap gestures in paged mode: tapping left advances, tapping right go
   fireEvent.touchStart(surface, { touches: [{ clientX: 300, clientY: 300 }] });
   fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 298, clientY: 299 }] });
   expect(await screen.findByRole("img", { name: "Page 1" })).toBeInTheDocument();
+});
+
+it("ignores tap gestures originating on interactive elements while preserving intentional page-turn taps", async () => {
+  const data = initial();
+  data.readerModes[title.id] = "paged-rtl";
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  const page1 = await screen.findByRole("img", { name: "Page 1" });
+  fireEvent.error(page1);
+
+  // An interactive retry button is now present on the page
+  const retryBtn = await screen.findByRole("button", { name: "Retry page 1" });
+  expect(retryBtn).toBeInTheDocument();
+
+  vi.stubGlobal("innerWidth", 375);
+
+  // Tapping on the retry button (located in the left tap zone) must NOT advance the page
+  fireEvent.touchStart(retryBtn, { touches: [{ clientX: 50, clientY: 300 }] });
+  fireEvent.touchEnd(retryBtn, { changedTouches: [{ clientX: 50, clientY: 300 }] });
+
+  expect(screen.queryByRole("img", { name: "Page 2" })).not.toBeInTheDocument();
+  expect(screen.getByText("Page 1 / 3")).toBeInTheDocument();
+
+  // Intentional tap on non-interactive area advances to page 2
+  const surface = document.querySelector(".source-reader__pages--paged")!;
+  fireEvent.touchStart(surface, { touches: [{ clientX: 50, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 50, clientY: 300 }] });
+
+  expect(await screen.findByRole("img", { name: "Page 2" })).toBeInTheDocument();
+  expect(screen.getByText("Page 2 / 3")).toBeInTheDocument();
+});
+
+it("in vertical scroll mode, loading the final image leaves Finish chapter disabled until the reader genuinely reaches the final page", async () => {
+  const user = userEvent.setup();
+  const PAGE_H = 600;
+
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    cb(0);
+    return 1;
+  });
+
+  let scrollTop = 0;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 390, width: 390, x: 0, y: top, toJSON() {} }) as DOMRect;
+    if (this.dataset.page !== undefined) return rect(Number(this.dataset.page) * PAGE_H - scrollTop, PAGE_H);
+    if (this.id === "source-reader-end") return rect(3 * PAGE_H - scrollTop, 400);
+    return rect(0, 0);
+  });
+
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  await screen.findByRole("img", { name: "Page 1" });
+  const page3 = screen.getByRole("img", { name: "Page 3" });
+
+  // Load the final image while the user is still at the top of the chapter (scrollTop = 0, page = 0)
+  fireEvent.load(page3);
+
+  // Loading the final image must NOT enable Finish chapter
+  const finishBtn = screen.getByRole("button", { name: "Finish chapter" });
+  expect(finishBtn).toBeDisabled();
+  expect(screen.getByText(/Scroll to the final page/)).toBeInTheDocument();
+  expect(store.getSnapshot()?.progress[title.id]).toBeUndefined();
+
+  // Simulate scrolling to the final page (scrollTop = 1200)
+  scrollTop = 1200;
+  fireEvent.scroll(window);
+
+  // Once genuinely reached and loaded, Finish chapter becomes available
+  expect(finishBtn).not.toBeDisabled();
+  await user.click(finishBtn);
+
+  expect(finishBtn).toHaveTextContent("Chapter finished");
+  expect(finishBtn).toBeDisabled();
+  expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
 });
 
 it("provides a direct back to series recovery link when chapter fails to load", async () => {
