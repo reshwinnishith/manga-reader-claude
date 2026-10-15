@@ -7,7 +7,15 @@ import { getSyncNotice, getSyncStatus, publishSyncState, subscribeSyncStatus, ty
 import { useUserData } from "@/state/use-user-data";
 import { AlertIcon, CheckIcon, CloudIcon, RefreshIcon } from "./icons";
 
-export function SyncStatusIndicator({ showButton = true }: { showButton?: boolean }) {
+export function SyncStatusIndicator({
+  showButton = true,
+  onClick,
+  className,
+}: {
+  showButton?: boolean;
+  onClick?: () => void;
+  className?: string;
+}) {
   const [status, setStatus] = useState<SyncStatus>(() => getSyncStatus());
   const [optedIn, setOptedIn] = useState<boolean>(() => isCloudSyncEnabled());
   const [isManualSyncing, setIsManualSyncing] = useState(false);
@@ -144,7 +152,7 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
 
   return (
     <div
-      className="sync-status"
+      className={["sync-status", className, onClick ? "sync-status--interactive" : ""].filter(Boolean).join(" ")}
       style={{
         display: "inline-flex",
         flexWrap: "wrap",
@@ -152,8 +160,22 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
         gap: "6px",
         fontSize: "0.8125rem",
         color: "var(--text-secondary, #9995a7)",
+        cursor: onClick ? "pointer" : undefined,
       }}
       title={title}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
     >
       <span
         style={{

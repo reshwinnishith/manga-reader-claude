@@ -16,7 +16,7 @@ import { migrateUserData } from "@/lib/user-data";
 import { useAllSeries } from "@/state/use-all-series";
 import { useUserData } from "@/state/use-user-data";
 import { Cover } from "./cover";
-import { DiscoverIcon } from "./icons";
+import { CloudIcon, DiscoverIcon, SettingsIcon, SortIcon } from "./icons";
 import { EmptyState, GridSkeleton, PageHeader, TypeBadge } from "./ui";
 import { SyncStatusIndicator } from "./sync-status";
 
@@ -102,6 +102,7 @@ export function LibraryView() {
   const { data, actions, recovery } = useUserData();
   const importRef = useRef<HTMLInputElement>(null);
   const [backupMessage, setBackupMessage] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
   const [statusFilter, setStatusFilter] = useState<LibraryFilter>("all");
   const [typeFilter, setTypeFilter] = useState<LibraryTypeFilter>("all");
   const [sort, setSort] = useState<LibrarySort>("recent-active");
@@ -136,137 +137,222 @@ export function LibraryView() {
     setQuery("");
   };
 
+  const isSettingsVisible = showSettings || Boolean(recovery);
+
   return (
     <>
       <PageHeader
         title="Library"
         subtitle={data ? (hasActiveFilters ? `${items.length} of ${totalInLibrary} series` : `${totalInLibrary} series`) : undefined}
-      />
+      >
+        <div className="library-header-actions">
+          <SyncStatusIndicator
+            showButton={false}
+            onClick={() => setShowSettings((s) => !s)}
+            className="library-header__sync-pill"
+          />
+          <button
+            type="button"
+            className={`btn btn--secondary btn--compact library-header__settings-btn ${showSettings ? "btn--active" : ""}`}
+            onClick={() => setShowSettings((s) => !s)}
+            aria-expanded={isSettingsVisible}
+            aria-controls="library-settings-panel"
+            aria-label="Library backup and cloud settings"
+            title="Backup and cloud settings"
+          >
+            <SettingsIcon width={15} height={15} />
+            <span className="library-header__settings-label">Settings</span>
+          </button>
+        </div>
+      </PageHeader>
 
-      <div className="dcard__actions" style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px" }}>
-        <button
-          className="btn btn--secondary btn--compact"
-          type="button"
-          disabled={!data}
-          onClick={() => {
-            if (!data) return;
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = recovery ? "mangareader-session-data.json" : "mangareader-library-backup.json";
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          }}
+      {/* Settings & Backup Panel */}
+      {isSettingsVisible && (
+        <section
+          id="library-settings-panel"
+          className="library-settings-panel"
+          aria-label="Library backup and cloud settings"
         >
-          {recovery ? "Export session data" : "Export backup"}
-        </button>
-        <button
-          className="btn btn--secondary btn--compact"
-          type="button"
-          onClick={() => importRef.current?.click()}
-        >
-          Import backup
-        </button>
-        <input
-          ref={importRef}
-          type="file"
-          accept=".json,application/json"
-          style={{ display: "none" }}
-          aria-label="Import library backup"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            try {
-              const parsed = migrateUserData(JSON.parse(await file.text()));
-              if (!parsed) throw new Error("Invalid backup");
-              if (!window.confirm("Replace your current library and reading progress with this backup?")) return;
-              actions.replaceData(parsed);
-              setBackupMessage(
-                recovery
-                  ? "Backup loaded into this session only. The original stored record is unchanged; session changes cannot be saved."
-                  : "Backup restored.",
-              );
-            } catch {
-              setBackupMessage("Couldn't read this backup file.");
-            }
-            e.target.value = "";
-          }}
-        />
-        <SyncStatusIndicator />
-      </div>
+          <div className="library-settings-panel__header">
+            <div className="library-settings-panel__title-wrap">
+              <SettingsIcon width={18} height={18} />
+              <h2 className="library-settings-panel__title">Library & Cloud Settings</h2>
+            </div>
+            {!recovery && (
+              <button
+                type="button"
+                className="btn btn--subtle btn--compact"
+                onClick={() => setShowSettings(false)}
+                aria-label="Close settings panel"
+              >
+                Close
+              </button>
+            )}
+          </div>
 
-      {recovery && (
-        <p className="notice">
-          Session export contains only data from this session. It does not contain your original stored library. Use
-          Download original stored data in the recovery warning when available.
-        </p>
+          <div className="library-settings-panel__grid">
+            {/* Cloud Sync & Google Account */}
+            <div className="library-settings-card">
+              <div className="library-settings-card__header">
+                <CloudIcon width={20} height={20} />
+                <div>
+                  <h3 className="library-settings-card__title">Cloud Synchronization</h3>
+                  <p className="library-settings-card__desc">
+                    Sync library entries, reading progress, and reader modes across devices.
+                  </p>
+                </div>
+              </div>
+              <div className="library-settings-card__body">
+                <SyncStatusIndicator showButton={true} />
+              </div>
+            </div>
+
+            {/* Offline Backup & Restore */}
+            <div className="library-settings-card">
+              <div className="library-settings-card__header">
+                <SortIcon width={20} height={20} />
+                <div>
+                  <h3 className="library-settings-card__title">Data Backup & Restore</h3>
+                  <p className="library-settings-card__desc">
+                    Export a local JSON copy of your library or restore a previous backup.
+                  </p>
+                </div>
+              </div>
+              <div className="library-settings-card__body">
+                <div className="library-settings-card__actions">
+                  <button
+                    className="btn btn--secondary btn--compact"
+                    type="button"
+                    disabled={!data}
+                    onClick={() => {
+                      if (!data) return;
+                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = recovery ? "mangareader-session-data.json" : "mangareader-library-backup.json";
+                      a.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    }}
+                  >
+                    {recovery ? "Export session data" : "Export backup"}
+                  </button>
+                  <button
+                    className="btn btn--secondary btn--compact"
+                    type="button"
+                    onClick={() => importRef.current?.click()}
+                  >
+                    Import backup
+                  </button>
+                </div>
+                <input
+                  ref={importRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: "none" }}
+                  aria-label="Import library backup"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const parsed = migrateUserData(JSON.parse(await file.text()));
+                      if (!parsed) throw new Error("Invalid backup");
+                      if (!window.confirm("Replace your current library and reading progress with this backup?")) return;
+                      actions.replaceData(parsed);
+                      setBackupMessage(
+                        recovery
+                          ? "Backup loaded into this session only. The original stored record is unchanged; session changes cannot be saved."
+                          : "Backup restored.",
+                      );
+                    } catch {
+                      setBackupMessage("Couldn't read this backup file.");
+                    }
+                    e.target.value = "";
+                  }}
+                />
+                {backupMessage && <p role="status" className="library-settings-card__message">{backupMessage}</p>}
+              </div>
+            </div>
+          </div>
+
+          {recovery && (
+            <p className="notice" style={{ marginTop: 12 }}>
+              Session export contains only data from this session. It does not contain your original stored library. Use
+              Download original stored data in the recovery warning when available.
+            </p>
+          )}
+        </section>
       )}
-      {backupMessage && <p role="status" className="muted">{backupMessage}</p>}
 
-      <div className="search">
-        <DiscoverIcon width={20} height={20} />
-        <input
-          type="search"
-          className="search__input"
-          placeholder="Search your library"
-          aria-label="Search your library"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          enterKeyHint="search"
-          autoComplete="off"
-        />
-      </div>
+      {/* Search, Filter & Sort Controls */}
+      <div className="library-controls">
+        <div className="library-toolbar">
+          <div className="search library-toolbar__search">
+            <DiscoverIcon width={20} height={20} />
+            <input
+              type="search"
+              className="search__input"
+              placeholder="Search your library"
+              aria-label="Search your library"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              enterKeyHint="search"
+              autoComplete="off"
+            />
+          </div>
 
-      {/* Type filter row */}
-      <div className="chips" role="group" aria-label="Filter by type">
-        {TYPE_FILTERS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            className="chip"
-            aria-pressed={typeFilter === t.value}
-            onClick={() => setTypeFilter(t.value)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+          <div className="library-sort">
+            <label htmlFor="library-sort-select" className="library-sort__label">
+              Sort by
+            </label>
+            <select
+              id="library-sort-select"
+              className="library-sort__select"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as LibrarySort)}
+              aria-label="Sort library"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
 
-      {/* Reading status filter row */}
-      <div className="chips" role="group" aria-label="Filter by reading status">
-        {STATUS_FILTERS.map((f) => (
-          <button
-            key={f.value}
-            type="button"
-            className="chip"
-            aria-pressed={statusFilter === f.value}
-            onClick={() => setStatusFilter(f.value)}
-          >
-            {f.label}
-            <span className="chip__count">{counts[f.value]}</span>
-          </button>
-        ))}
-      </div>
+        <div className="library-filters">
+          {/* Reading status filter row */}
+          <div className="chips chips--status" role="group" aria-label="Filter by reading status">
+            {STATUS_FILTERS.map((f) => (
+              <button
+                key={f.value}
+                type="button"
+                className="chip"
+                aria-pressed={statusFilter === f.value}
+                onClick={() => setStatusFilter(f.value)}
+              >
+                {f.label}
+                <span className="chip__count">{counts[f.value]}</span>
+              </button>
+            ))}
+          </div>
 
-      {/* Sort options selector */}
-      <div className="library-sort">
-        <label htmlFor="library-sort-select" className="library-sort__label">
-          Sort by
-        </label>
-        <select
-          id="library-sort-select"
-          className="library-sort__select"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as LibrarySort)}
-          aria-label="Sort library"
-        >
-          {SORT_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          {/* Type filter row */}
+          <div className="chips chips--type" role="group" aria-label="Filter by type">
+            {TYPE_FILTERS.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                className="chip chip--compact"
+                aria-pressed={typeFilter === t.value}
+                onClick={() => setTypeFilter(t.value)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {!data ? (
@@ -294,7 +380,7 @@ export function LibraryView() {
           </div>
         </div>
       ) : (
-        <ul className="grid" aria-label="Library">
+        <ul className="grid library-grid" aria-label="Library">
           {items.map((s) => {
             const entry = data.library[s.id]!;
             const { label: progressLabel } = getProgressLabel(s, data);

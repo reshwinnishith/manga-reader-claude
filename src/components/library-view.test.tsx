@@ -195,3 +195,51 @@ describe("LibraryView · empty states and filters reset", () => {
     expect(searchInput).toHaveValue("");
   });
 });
+
+describe("LibraryView · settings drawer & single-title layout", () => {
+  it("toggles the settings and backup drawer via the header settings button", async () => {
+    const user = userEvent.setup();
+    renderWithApp(<LibraryView />, createDemoUserData());
+
+    // Initially settings panel is closed
+    expect(screen.queryByRole("region", { name: "Library backup and cloud settings" })).toBeNull();
+
+    // Click Settings button
+    const settingsBtn = screen.getByRole("button", { name: "Library backup and cloud settings" });
+    await user.click(settingsBtn);
+
+    // Panel is now visible with Cloud Sync and Backup sections
+    const panel = screen.getByRole("region", { name: "Library backup and cloud settings" });
+    expect(panel).toBeInTheDocument();
+    expect(within(panel).getByText("Cloud Synchronization")).toBeInTheDocument();
+    expect(within(panel).getByText("Data Backup & Restore")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Export backup" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Import backup" })).toBeInTheDocument();
+
+    // Click Close button
+    const closeBtn = within(panel).getByRole("button", { name: "Close settings panel" });
+    await user.click(closeBtn);
+
+    expect(screen.queryByRole("region", { name: "Library backup and cloud settings" })).toBeNull();
+  });
+
+  it("renders single-title state with clean series count and single card in grid", () => {
+    let data = emptyUserData();
+    data = {
+      ...data,
+      library: {
+        "skyward-lanterns": { seriesId: "skyward-lanterns", status: "reading", addedAt: NOW },
+      },
+    };
+    renderWithApp(<LibraryView />, data);
+
+    // Header series count
+    expect(screen.getByText("1 series")).toBeInTheDocument();
+
+    // Grid contains exactly 1 card
+    const grid = screen.getByRole("list", { name: "Library" });
+    const links = within(grid).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(within(grid).getByRole("combobox", { name: "Reading status for Skyward Lanterns" })).toHaveValue("reading");
+  });
+});
