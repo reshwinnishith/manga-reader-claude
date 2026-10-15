@@ -54,7 +54,7 @@ describe("Discover · search flow", () => {
     expect(within(list).getByText("Moonlit Pharmacy (Fixture)")).toBeInTheDocument();
     expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
     expect(screen.queryByText("Neon Ronin")).not.toBeInTheDocument();
-    await user().click(screen.getByRole("button", { name: "Manhwa" });
+    await user().click(screen.getByRole("button", { name: "Manhwa" }));
     expect(within(list).queryByText("Moonlit Pharmacy (Fixture)")).not.toBeInTheDocument();
     expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
     expect(search).not.toHaveBeenCalled();

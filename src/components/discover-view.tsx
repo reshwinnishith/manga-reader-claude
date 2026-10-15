@@ -7,7 +7,7 @@ import type { SavedTitle, SeriesType } from "@/domain/types";
 import { seriesFromSaved } from "@/lib/series-from-saved";
 import { ANILIST_SITE, MIN_QUERY_LENGTH, getAniListClient, type AniListClient, type CountryFilter } from "@/services/anilist";
 import { useTitleSearch } from "@/state/use-title-search";
-import { AddToLibraryButton, SaveTitleButton } from "./add-button";
+import { SaveTitleButton } from "./add-button";
 import { Cover } from "./cover";
 import { DiscoverIcon } from "./icons";
 import { EmptyState, ErrorState, PageHeader, TypeBadge } from "./ui";
