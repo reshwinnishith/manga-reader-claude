@@ -180,6 +180,47 @@ describe("library & discover filtering", () => {
     expect(filterLibrary(MOCK_SERIES, d, "all", "").map((s) => s.id)).toEqual(["neon-ronin"]);
   });
 
+  it("filters library by type (manga, manhwa, manhua) and combines with status", () => {
+    // All types
+    expect(filterLibrary(MOCK_SERIES, demo, "all", "", "all")).toHaveLength(8);
+    // Manga only
+    const manga = filterLibrary(MOCK_SERIES, demo, "all", "", "manga");
+    expect(manga.every((s) => s.type === "manga")).toBe(true);
+    // Manhwa only
+    const manhwa = filterLibrary(MOCK_SERIES, demo, "all", "", "manhwa");
+    expect(manhwa.every((s) => s.type === "manhwa")).toBe(true);
+    // Combined: reading + manhwa
+    const readingManhwa = filterLibrary(MOCK_SERIES, demo, "reading", "", "manhwa");
+    expect(readingManhwa.every((s) => s.type === "manhwa" && demo.library[s.id]?.status === "reading")).toBe(true);
+  });
+
+  it("sorts library deterministically by recent-active, recent-added, title-asc, title-desc, and progress", () => {
+    // title-asc
+    const asc = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "title-asc");
+    for (let i = 0; i < asc.length - 1; i++) {
+      expect(asc[i]!.title.localeCompare(asc[i + 1]!.title)).toBeLessThanOrEqual(0);
+    }
+
+    // title-desc
+    const desc = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "title-desc");
+    for (let i = 0; i < desc.length - 1; i++) {
+      expect(desc[i]!.title.localeCompare(desc[i + 1]!.title)).toBeGreaterThanOrEqual(0);
+    }
+
+    // recent-added
+    const added = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "recent-added");
+    for (let i = 0; i < added.length - 1; i++) {
+      const ta = demo.library[added[i]!.id]!.addedAt;
+      const tb = demo.library[added[i + 1]!.id]!.addedAt;
+      expect(ta.localeCompare(tb)).toBeGreaterThanOrEqual(0);
+    }
+
+    // progress
+    const progressSorted = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "progress");
+    // Rooftop Rivals has 100% progress completed, so it should be near or at the top
+    expect(progressSorted[0]!.id).toBe("rooftop-rivals");
+  });
+
   it("searches the catalog by title, author or genre, with a type filter", () => {
     expect(searchCatalog(MOCK_SERIES, "neon", "all").map((s) => s.id)).toEqual(["neon-ronin"]);
     expect(searchCatalog(MOCK_SERIES, "seo ji-woo", "all").map((s) => s.id)).toEqual(["last-cartographer"]);

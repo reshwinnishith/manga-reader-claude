@@ -47,7 +47,8 @@ describe("Library", () => {
     expect(within(grid()).getAllByRole("link")).toHaveLength(1);
     expect(within(grid()).getByText("Neon Ronin")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^All/ }));
+    const statusGroup = screen.getByRole("group", { name: "Filter by reading status" });
+    await user.click(within(statusGroup).getByRole("button", { name: /^All/ }));
     await user.type(screen.getByRole("searchbox", { name: "Search your library" }), "zzzz");
     expect(screen.getByText("No matches")).toBeInTheDocument();
   });

@@ -139,23 +139,60 @@ export function getRecentlyAdded(catalog: Series[], data: UserData): Series[] {
 }
 
 export type LibraryFilter = "all" | ReadingStatus;
+export type LibraryTypeFilter = "all" | Series["type"];
+export type LibrarySort = "recent-active" | "recent-added" | "title-asc" | "title-desc" | "progress";
 
 export function filterLibrary(
   catalog: Series[],
   data: UserData,
-  filter: LibraryFilter,
-  query: string,
+  filter: LibraryFilter = "all",
+  query: string = "",
+  typeFilter: LibraryTypeFilter = "all",
+  sort: LibrarySort = "recent-active",
 ): Series[] {
   const q = query.trim().toLowerCase();
   return catalog
     .filter((s) => data.library[s.id])
     .filter((s) => filter === "all" || data.library[s.id]!.status === filter)
+    .filter((s) => typeFilter === "all" || s.type === typeFilter)
     .filter((s) => !q || matchesQuery(s, q))
     .sort((a, b) => {
-      // Most recently touched first, falling back to when it was added.
+      if (sort === "recent-added") {
+        const diff = data.library[b.id]!.addedAt.localeCompare(data.library[a.id]!.addedAt);
+        if (diff !== 0) return diff;
+        return a.title.localeCompare(b.title);
+      }
+      if (sort === "title-asc") {
+        const diff = a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+      }
+      if (sort === "title-desc") {
+        const diff = b.title.localeCompare(a.title, undefined, { sensitivity: "base" });
+        if (diff !== 0) return diff;
+        return a.id.localeCompare(b.id);
+      }
+      if (sort === "progress") {
+        const fa = getSeriesProgressFraction(a, data.progress[a.id]);
+        const fb = getSeriesProgressFraction(b, data.progress[b.id]);
+        if (fb !== fa) return fb - fa;
+
+        const hasA = data.progress[a.id] ? 1 : 0;
+        const hasB = data.progress[b.id] ? 1 : 0;
+        if (hasB !== hasA) return hasB - hasA;
+
+        const ta = data.progress[a.id]?.updatedAt ?? data.library[a.id]!.addedAt;
+        const tb = data.progress[b.id]?.updatedAt ?? data.library[b.id]!.addedAt;
+        const diff = tb.localeCompare(ta);
+        if (diff !== 0) return diff;
+        return a.title.localeCompare(b.title);
+      }
+      // "recent-active" default
       const ta = data.progress[a.id]?.updatedAt ?? data.library[a.id]!.addedAt;
       const tb = data.progress[b.id]?.updatedAt ?? data.library[b.id]!.addedAt;
-      return tb.localeCompare(ta);
+      const diff = tb.localeCompare(ta);
+      if (diff !== 0) return diff;
+      return a.title.localeCompare(b.title);
     });
 }
 
