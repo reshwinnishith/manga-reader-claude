@@ -279,22 +279,23 @@ function BrowseSection({ sectionId, title, sort, country, client }: BrowseSectio
 function ShelfCard({ title: t }: { title: SavedTitle }) {
   const series = seriesFromSaved(t);
   return (
-    <Link href={`/series/${t.id}`} className="card shelf-card" aria-label={`Open ${t.title}`}>
-      <div className="card__cover">
-        <Cover series={series} />
-        <span className="card__badge">
-          <TypeBadge type={t.type} />
+    <div className="card shelf-card">
+      <Link href={`/series/${t.id}`} className="shelf-card__link" aria-label={`Open ${t.title}`}>
+        <div className="card__cover">
+          <Cover series={series} />
+          <span className="card__badge">
+            <TypeBadge type={t.type} />
+          </span>
+        </div>
+        <span className="card__title">{t.title}</span>
+        <span className="card__caption">
+          {t.authors[0] ?? (t.year ? String(t.year) : STATUS_LABEL[t.status])}
         </span>
-      </div>
-      <span className="card__title">{t.title}</span>
-      <span className="card__caption">
-        {t.authors[0] ?? (t.year ? String(t.year) : STATUS_LABEL[t.status])}
-      </span>
-      {/* Save button sits outside the Link; wrapping div breaks the interactive nesting */}
-      <div className="shelf-card__save" onClick={(e) => e.preventDefault()}>
+      </Link>
+      <div className="shelf-card__save">
         <SaveTitleButton title={t} compact />
       </div>
-    </Link>
+    </div>
   );
 }
 

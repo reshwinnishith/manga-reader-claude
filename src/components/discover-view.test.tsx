@@ -97,6 +97,27 @@ describe("Discover · browse flow", () => {
     expect(data.library["al-101"]?.status).toBe("planned");
   });
 
+  it("renders shelf card link and save button as separate non-nested interactive elements", async () => {
+    const { client } = fakeClient(async () => result(), async () => result([moon]));
+    const { store } = renderWithApp(<DiscoverView client={client} />, emptyUserData());
+    await act(async () => {});
+    const trending = screen.getByRole("list", { name: "Trending Now" });
+    const cardLink = within(trending).getByRole("link", { name: "Open Moonlit Pharmacy (Fixture)" });
+    const saveButton = within(trending).getByRole("button", { name: "Add Moonlit Pharmacy (Fixture) to library" });
+
+    // Verify non-nested structure: save button is not inside the card link, and link is not inside button
+    expect(saveButton.closest("a")).toBeNull();
+    expect(cardLink.closest("button")).toBeNull();
+    expect(cardLink).toHaveAttribute("href", "/series/al-101");
+
+    // Clicking save button updates library without triggering link click
+    const linkClickSpy = vi.fn();
+    cardLink.addEventListener("click", linkClickSpy);
+    await user().click(saveButton);
+    expect(linkClickSpy).not.toHaveBeenCalled();
+    expect(store.getSnapshot()!.library["al-101"]?.status).toBe("planned");
+  });
+
   it("shows an inline error and retry button if a browse section fails", async () => {
     let calls = 0;
     const { client } = fakeClient(
