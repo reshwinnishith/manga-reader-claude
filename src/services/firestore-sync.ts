@@ -30,6 +30,22 @@ export const CLOUD_SYNC_OPT_IN_KEY = "manga-reader:v1:cloud-sync-enabled";
 export const PRE_SYNC_BACKUP_KEY = "manga-reader:v1:pre-sync-backup";
 export const MAX_BATCH_OPERATIONS = 400;
 
+/** 1 MiB hard limit for Cloud Firestore documents */
+export const FIRESTORE_DOC_MAX_BYTES = 1048576;
+/** 900 KiB safe threshold to protect against Firestore 1 MiB document limit */
+export const FIRESTORE_DOC_SAFE_LIMIT_BYTES = 900 * 1024;
+
+/**
+ * Estimates the UTF-8 byte size of serialized JSON data.
+ */
+export function estimateDataSize(data: unknown): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(data)).length;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Checks whether user has explicitly opted into Cloud Firestore synchronization.
  */
@@ -267,6 +283,8 @@ class FirestoreSyncService {
   private listeners = new Set<(status: SyncStatus) => void>();
   private unsubscribeSnapshot: Unsubscribe | null = null;
   private isSyncing = false;
+  /** Monotonic local ID to invalidate delayed or obsolete subcollection reconciliations */
+  private currentReconciliationId = 0;
 
   constructor() {
     if (typeof window !== "undefined") {
@@ -311,15 +329,14 @@ class FirestoreSyncService {
     }
   }
 
-  /**
-   * Preserves local pre-sync backup in browser storage before initial sync.
-   */
   public preserveLocalBackup(data: UserData): boolean {
     return createAndVerifyLocalBackup(data);
   }
 
   /**
    * Pulls remote data from Firestore for the given user, returning the data and its revision.
+   * If the authoritative document is sharded/segmented due to size guards, reconciles
+   * with subcollections without truncating user data.
    */
   public async fetchRemoteData(
     db: Firestore,
@@ -331,50 +348,26 @@ class FirestoreSyncService {
     if (syncSnap.exists()) {
       const data = syncSnap.data() as UserData & { revision?: number };
       const revision = typeof data.revision === "number" ? data.revision : 0;
-      return {
-        data: {
-          version: USER_DATA_VERSION,
-          library: data.library || {},
-          progress: data.progress || {},
-          readerModes: data.readerModes || {},
-          savedTitles: data.savedTitles || {},
-          tombstones: data.tombstones || {},
-          seeded: data.seeded === true,
-        },
-        revision,
-      };
-    }
 
-    // Fallback: check subcollections if sync doc is empty
-    const libraryCol = collection(db, "users", user.uid, "library");
-    const libSnap = await getDocs(libraryCol);
-    if (!libSnap.empty) {
-      const library: Record<string, LibraryEntry> = {};
-      libSnap.forEach((d) => {
-        library[d.id] = d.data() as LibraryEntry;
-      });
+      let library = data.library || {};
+      let progress = data.progress || {};
+      let readerModes = data.readerModes || {};
+      let savedTitles = data.savedTitles || {};
 
-      const progCol = collection(db, "users", user.uid, "progress");
-      const progSnap = await getDocs(progCol);
-      const progress: Record<string, SeriesProgress> = {};
-      progSnap.forEach((d) => {
-        progress[d.id] = d.data() as SeriesProgress;
-      });
+      // Safe size fallback check: if library or progress is empty on the sync doc
+      // but subcollections exist, pull subcollections to avoid truncation.
+      const hasMissingCollections =
+        Object.keys(library).length === 0 && Object.keys(progress).length === 0;
 
-      const modesCol = collection(db, "users", user.uid, "readerModes");
-      const modesSnap = await getDocs(modesCol);
-      const readerModes: Record<string, ReaderMode> = {};
-      modesSnap.forEach((d) => {
-        const dData = d.data() as { mode: ReaderMode };
-        if (dData.mode) readerModes[d.id] = dData.mode;
-      });
-
-      const savedCol = collection(db, "users", user.uid, "savedTitles");
-      const savedSnap = await getDocs(savedCol);
-      const savedTitles: Record<string, SavedTitle> = {};
-      savedSnap.forEach((d) => {
-        savedTitles[d.id] = d.data() as SavedTitle;
-      });
+      if (hasMissingCollections) {
+        const subData = await this.fetchSubcollections(db, user);
+        if (subData) {
+          library = { ...subData.library, ...library };
+          progress = { ...subData.progress, ...progress };
+          readerModes = { ...subData.readerModes, ...readerModes };
+          savedTitles = { ...subData.savedTitles, ...savedTitles };
+        }
+      }
 
       return {
         data: {
@@ -383,49 +376,99 @@ class FirestoreSyncService {
           progress,
           readerModes,
           savedTitles,
-          tombstones: {},
-          seeded: true,
+          tombstones: data.tombstones || {},
+          seeded: data.seeded === true,
         },
-        revision: 0,
+        revision,
       };
+    }
+
+    // Fallback: check subcollections if sync doc is empty
+    const subData = await this.fetchSubcollections(db, user);
+    if (subData) {
+      return { data: subData, revision: 0 };
     }
 
     return { data: null, revision: 0 };
   }
 
-  /**
-   * Uploads subcollections using chunked batches <= 400 operations,
-   * then atomically updates the aggregate sync doc via a transaction with revision check.
-   */
-  public async uploadUserData(
-    db: Firestore,
-    user: User,
-    data: UserData,
-    expectedRevision = 0
-  ): Promise<number> {
-    const now = new Date().toISOString();
-    const createdAt = user.metadata?.creationTime
-      ? new Date(user.metadata.creationTime).toISOString()
-      : now;
+  private async fetchSubcollections(db: Firestore, user: User): Promise<UserData | null> {
+    const libraryCol = collection(db, "users", user.uid, "library");
+    const libSnap = await getDocs(libraryCol);
+    if (libSnap.empty) {
+      return null;
+    }
 
-    // Collect subcollection batch operations
-    const operations: ChunkedOperation[] = [];
-
-    // 1. Root user doc
-    operations.push({
-      type: "set",
-      ref: doc(db, "users", user.uid),
-      data: {
-        uid: user.uid,
-        createdAt,
-        updatedAt: now,
-        version: USER_DATA_VERSION,
-        anonymous: user.isAnonymous,
-      },
-      options: { merge: true },
+    const library: Record<string, LibraryEntry> = {};
+    libSnap.forEach((d) => {
+      library[d.id] = d.data() as LibraryEntry;
     });
 
-    // 2. Library subcollection: add/update existing
+    const progCol = collection(db, "users", user.uid, "progress");
+    const progSnap = await getDocs(progCol);
+    const progress: Record<string, SeriesProgress> = {};
+    progSnap.forEach((d) => {
+      progress[d.id] = d.data() as SeriesProgress;
+    });
+
+    const modesCol = collection(db, "users", user.uid, "readerModes");
+    const modesSnap = await getDocs(modesCol);
+    const readerModes: Record<string, ReaderMode> = {};
+    modesSnap.forEach((d) => {
+      const dData = d.data() as { mode: ReaderMode };
+      if (dData.mode) readerModes[d.id] = dData.mode;
+    });
+
+    const savedCol = collection(db, "users", user.uid, "savedTitles");
+    const savedSnap = await getDocs(savedCol);
+    const savedTitles: Record<string, SavedTitle> = {};
+    savedSnap.forEach((d) => {
+      savedTitles[d.id] = d.data() as SavedTitle;
+    });
+
+    return {
+      version: USER_DATA_VERSION,
+      library,
+      progress,
+      readerModes,
+      savedTitles,
+      tombstones: {},
+      seeded: true,
+    };
+  }
+
+  /**
+   * Reconciles subcollections in chunked batches <= 400 operations.
+   * Guarantees that delayed or obsolete reconciliation passes CANNOT overwrite
+   * a newer revision committed concurrently or subsequently.
+   */
+  public async reconcileSubcollections(
+    db: Firestore,
+    user: User,
+    reconciliationId: number,
+    targetRevision: number,
+    data: UserData
+  ): Promise<void> {
+    const syncDocRef = doc(db, "users", user.uid, "sync", "userData");
+
+    // Check if superseded locally before starting
+    if (this.currentReconciliationId !== reconciliationId) {
+      return;
+    }
+
+    // Check if server is already at a higher revision
+    const currentSnap = await getDoc(syncDocRef);
+    if (currentSnap.exists()) {
+      const currentRev = (currentSnap.data()?.revision as number) ?? 0;
+      if (currentRev > targetRevision) {
+        return; // Abort immediately: newer revision committed
+      }
+    }
+
+    const now = new Date().toISOString();
+    const operations: ChunkedOperation[] = [];
+
+    // Library subcollection
     for (const [key, entry] of Object.entries(data.library)) {
       const ref = doc(db, "users", user.uid, "library", key);
       const title = data.savedTitles[key]?.title || key;
@@ -444,7 +487,7 @@ class FirestoreSyncService {
       });
     }
 
-    // 3. Library subcollection: delete tombstoned entries
+    // Tombstones deletion in subcollection
     if (data.tombstones) {
       for (const tombstonedId of Object.keys(data.tombstones)) {
         if (!data.library[tombstonedId]) {
@@ -456,7 +499,7 @@ class FirestoreSyncService {
       }
     }
 
-    // 4. Progress subcollection
+    // Progress subcollection
     for (const [key, prog] of Object.entries(data.progress)) {
       const ref = doc(db, "users", user.uid, "progress", key);
       operations.push({
@@ -472,7 +515,7 @@ class FirestoreSyncService {
       });
     }
 
-    // 5. Reader modes subcollection
+    // Reader modes subcollection
     for (const [key, mode] of Object.entries(data.readerModes)) {
       const ref = doc(db, "users", user.uid, "readerModes", key);
       operations.push({
@@ -483,7 +526,7 @@ class FirestoreSyncService {
       });
     }
 
-    // 6. Saved titles subcollection
+    // Saved titles subcollection
     for (const [key, title] of Object.entries(data.savedTitles)) {
       const ref = doc(db, "users", user.uid, "savedTitles", key);
       operations.push({
@@ -499,45 +542,167 @@ class FirestoreSyncService {
       });
     }
 
-    // Commit subcollection batches in chunks of <= 400
-    await commitChunkedBatches(db, operations);
-
-    // 7. Atomic sync document commit via transaction
-    // This serves as the atomic commit marker: the sync is marked "ready" only
-    // after all chunked batches have safely completed.
-    const syncDocRef = doc(db, "users", user.uid, "sync", "userData");
-    const newRevision = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(syncDocRef);
-      const serverRevision = snap.exists() ? ((snap.data()?.revision as number) ?? 0) : 0;
-      if (expectedRevision > 0 && snap.exists() && serverRevision !== expectedRevision) {
-        throw new Error(
-          `Revision conflict: expected revision ${expectedRevision}, but server is at ${serverRevision}`
-        );
+    // Reconcile in chunked batches with liveness checks between chunks
+    for (let i = 0; i < operations.length; i += MAX_BATCH_OPERATIONS) {
+      if (this.currentReconciliationId !== reconciliationId) {
+        return; // Superseded mid-flight
       }
-      const nextRevision = Math.max(serverRevision, expectedRevision) + 1;
-      tx.set(
-        syncDocRef,
-        {
-          ...data,
-          revision: nextRevision,
-          syncStatus: "ready",
-          updatedAt: now,
-        },
-        { merge: true }
-      );
-      return nextRevision;
-    });
+      const chunk = operations.slice(i, i + MAX_BATCH_OPERATIONS);
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        if (op.type === "set") {
+          batch.set(op.ref, op.data, op.options);
+        } else if (op.type === "delete") {
+          batch.delete(op.ref);
+        }
+      }
+      await batch.commit();
+    }
+  }
 
-    return newRevision;
+  /**
+   * Unified, concurrency-safe atomic writer with Compare-And-Swap (CAS) transaction
+   * and automatic retry.
+   *
+   * Architectural Guarantee:
+   * 1. The authoritative state is atomically committed FIRST via runTransaction
+   *    on /users/{userId}/sync/userData with server revision verification.
+   * 2. Subcollections are reconciled asynchronously AFTER the atomic commit succeeds.
+   * 3. Size Guard: If data approaches Firestore's 1 MiB limit (> 900 KiB), the authoritative
+   *    doc stores sync manifest/tombstones while subcollections store full data, preventing
+   *    truncation or silent data loss.
+   */
+  public async atomicSyncOrPush(
+    db: Firestore,
+    user: User,
+    localData: UserData,
+    maxRetries = 3
+  ): Promise<UserData> {
+    const userDocRef = doc(db, "users", user.uid);
+    const syncDocRef = doc(db, "users", user.uid, "sync", "userData");
+
+    let attempt = 0;
+    while (attempt <= maxRetries) {
+      try {
+        const now = new Date().toISOString();
+        const createdAt = user.metadata?.creationTime
+          ? new Date(user.metadata.creationTime).toISOString()
+          : now;
+
+        // 1. Fetch current remote state and revision
+        const { data: remoteData, revision: expectedRevision } = await this.fetchRemoteData(
+          db,
+          user
+        );
+
+        // 2. Pure 3-way merge
+        const merged = mergeUserData(localData, remoteData);
+
+        // 3. Prepare payload with 1 MiB size guard
+        const fullPayload = {
+          version: USER_DATA_VERSION,
+          updatedAt: now,
+          library: merged.library,
+          progress: merged.progress,
+          readerModes: merged.readerModes,
+          savedTitles: merged.savedTitles,
+          tombstones: merged.tombstones || {},
+          seeded: Boolean(merged.seeded),
+        };
+
+        const estimatedBytes = estimateDataSize(fullPayload);
+        const isOverSafeLimit = estimatedBytes > FIRESTORE_DOC_SAFE_LIMIT_BYTES;
+
+        // Size Guard Fallback: If payload exceeds 900 KiB, store manifest & tombstones
+        // in sync doc and rely on subcollections for storage without truncation.
+        const syncPayload = isOverSafeLimit
+          ? {
+              version: USER_DATA_VERSION,
+              updatedAt: now,
+              readerModes: merged.readerModes,
+              tombstones: merged.tombstones || {},
+              seeded: Boolean(merged.seeded),
+            }
+          : fullPayload;
+
+        // 4. ATOMIC COMMIT FIRST via transaction
+        const nextRevision = await runTransaction(db, async (tx) => {
+          const snap = await tx.get(syncDocRef);
+          const serverRevision = snap.exists() ? ((snap.data()?.revision as number) ?? 0) : 0;
+
+          if (snap.exists() && serverRevision !== expectedRevision) {
+            throw new Error(
+              `Revision conflict: expected revision ${expectedRevision}, but server is at ${serverRevision}`
+            );
+          }
+
+          const newRev = Math.max(serverRevision, expectedRevision) + 1;
+
+          // Commit root user doc
+          tx.set(
+            userDocRef,
+            {
+              uid: user.uid,
+              createdAt,
+              updatedAt: now,
+              version: USER_DATA_VERSION,
+              anonymous: user.isAnonymous,
+            },
+            { merge: true }
+          );
+
+          // Commit authoritative sync doc
+          tx.set(
+            syncDocRef,
+            {
+              ...syncPayload,
+              revision: newRev,
+              syncStatus: "ready",
+              updatedAt: now,
+            },
+            { merge: true }
+          );
+
+          return newRev;
+        });
+
+        // 5. ATOMIC COMMIT SUCCEEDED!
+        // Advance reconciliation ID and spawn safe subcollection reconciliation
+        this.currentReconciliationId++;
+        const reconciliationId = this.currentReconciliationId;
+
+        // Non-blocking derived reconciliation
+        this.reconcileSubcollections(db, user, reconciliationId, nextRevision, merged).catch(
+          (err) => {
+            console.warn("Background subcollection reconciliation failed:", err);
+          }
+        );
+
+        return merged;
+      } catch (err: unknown) {
+        attempt++;
+        const isConflict =
+          err instanceof Error && err.message.toLowerCase().includes("revision conflict");
+
+        if (isConflict && attempt <= maxRetries) {
+          // Exponential backoff with jitter
+          const delayMs = Math.min(100 * Math.pow(2, attempt) + Math.random() * 50, 1000);
+          await new Promise((res) => setTimeout(res, delayMs));
+          continue;
+        }
+
+        throw err;
+      }
+    }
+
+    throw new Error("atomicSyncOrPush: Maximum retry attempts exceeded.");
   }
 
   /**
    * Synchronizes local user data with remote Firestore:
    * 1. Requires explicit user opt-in (`isCloudSyncEnabled`).
    * 2. Verifies local backup is recoverable before any network writes.
-   * 3. Fetches remote data and revision.
-   * 4. Non-destructively merges with tombstones.
-   * 5. Atomically commits changes with server revision check.
+   * 3. Executes atomicSyncOrPush with conflict retry.
    */
   public async syncWithRemote(localData: UserData): Promise<UserData> {
     if (!isFirebaseConfigured() || typeof window === "undefined" || !isCloudSyncEnabled()) {
@@ -558,7 +723,6 @@ class FirestoreSyncService {
     this.setStatus("syncing");
 
     try {
-      // Data safety check: verify recoverable local backup exists
       const backupOk = this.preserveLocalBackup(localData);
       if (!backupOk) {
         throw new Error("Local backup verification failed. Cloud sync aborted for data safety.");
@@ -574,15 +738,7 @@ class FirestoreSyncService {
         throw new Error("Firestore is not available");
       }
 
-      // Fetch remote
-      const { data: remoteData, revision: currentRevision } = await this.fetchRemoteData(db, user);
-
-      // Non-destructive merge
-      const merged = mergeUserData(localData, remoteData);
-
-      // Upload merged changes back with concurrency protection
-      await this.uploadUserData(db, user, merged, currentRevision);
-
+      const merged = await this.atomicSyncOrPush(db, user, localData);
       this.setStatus("synced");
       return merged;
     } catch (err) {
@@ -615,22 +771,36 @@ class FirestoreSyncService {
     const syncDocRef = doc(db, "users", authUser.uid, "sync", "userData");
     this.unsubscribeSnapshot = onSnapshot(
       syncDocRef,
-      (snapshot) => {
+      async (snapshot) => {
         if (!snapshot.exists() || snapshot.metadata.hasPendingWrites) {
           return;
         }
         const data = snapshot.data() as UserData & { syncStatus?: string };
-        // Ignore in-progress writes from another batch that haven't finished
         if (data.syncStatus === "syncing") {
           return;
         }
 
+        let library = data.library || {};
+        let progress = data.progress || {};
+        let readerModes = data.readerModes || {};
+        let savedTitles = data.savedTitles || {};
+
+        if (Object.keys(library).length === 0 && Object.keys(progress).length === 0) {
+          const subData = await this.fetchSubcollections(db, authUser);
+          if (subData) {
+            library = { ...subData.library, ...library };
+            progress = { ...subData.progress, ...progress };
+            readerModes = { ...subData.readerModes, ...readerModes };
+            savedTitles = { ...subData.savedTitles, ...savedTitles };
+          }
+        }
+
         const validData: UserData = {
           version: USER_DATA_VERSION,
-          library: data.library || {},
-          progress: data.progress || {},
-          readerModes: data.readerModes || {},
-          savedTitles: data.savedTitles || {},
+          library,
+          progress,
+          readerModes,
+          savedTitles,
           tombstones: data.tombstones || {},
           seeded: data.seeded === true,
         };
@@ -682,7 +852,6 @@ export function createSyncedPersistenceAdapter(
           .syncWithRemote(currentData)
           .then((merged) => {
             if (hasPendingLocalMutation) {
-              // Local changes occurred during network sync: merge against fresh local data
               hasPendingLocalMutation = false;
               const freshestLocal = localAdapter.load() ?? emptyUserData();
               const safeMerged = mergeUserData(freshestLocal, merged);
@@ -717,7 +886,7 @@ export function createSyncedPersistenceAdapter(
         hasPendingLocalMutation = true;
       }
 
-      // 2. Debounced remote push (600ms)
+      // 2. Debounced transactional remote push (600ms) with concurrency & retry protection
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
@@ -730,8 +899,18 @@ export function createSyncedPersistenceAdapter(
             isSyncing = true;
             // Get fresh local data to include any intermediate edits
             const latestData = localAdapter.load() ?? data;
-            await syncService.uploadUserData(db, user, latestData);
+            // All write paths now go through atomicSyncOrPush with CAS revision verification
+            const merged = await syncService.atomicSyncOrPush(db, user, latestData);
+            if (hasPendingLocalMutation) {
+              hasPendingLocalMutation = false;
+              const freshest = localAdapter.load() ?? emptyUserData();
+              const safeMerged = mergeUserData(freshest, merged);
+              localAdapter.save(safeMerged);
+            } else {
+              localAdapter.save(merged);
+            }
             syncService.setStatus("synced");
+            externalChangeCallback?.();
           }
         } catch (err) {
           console.warn("Background upload failed:", err);

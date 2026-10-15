@@ -5,11 +5,24 @@ import { USER_DATA_VERSION } from "@/domain/types";
 const mockBatchCommit = vi.fn().mockResolvedValue(undefined);
 const mockBatchSet = vi.fn();
 const mockBatchDelete = vi.fn();
+const mockGetDoc = vi.fn();
+const mockRunTransaction = vi.fn();
 
 vi.mock("firebase/firestore", async (importOriginal) => {
   const orig = await importOriginal<typeof import("firebase/firestore")>();
   return {
     ...orig,
+    collection: vi.fn((_db: unknown, ...segments: string[]) => ({
+      path: segments.join("/"),
+      id: segments[segments.length - 1],
+    })),
+    getDocs: vi.fn().mockResolvedValue({ empty: true, forEach: () => {} }),
+    doc: vi.fn((_db: unknown, ...segments: string[]) => ({
+      path: segments.join("/"),
+      id: segments[segments.length - 1],
+    })),
+    getDoc: (...args: unknown[]) => mockGetDoc(...args),
+    runTransaction: (...args: unknown[]) => mockRunTransaction(...args),
     writeBatch: vi.fn(() => ({
       set: mockBatchSet,
       delete: mockBatchDelete,
@@ -24,6 +37,9 @@ import {
   commitChunkedBatches,
   isCloudSyncEnabled,
   setCloudSyncEnabled,
+  estimateDataSize,
+  FIRESTORE_DOC_MAX_BYTES,
+  FIRESTORE_DOC_SAFE_LIMIT_BYTES,
   CLOUD_SYNC_OPT_IN_KEY,
   PRE_SYNC_BACKUP_KEY,
   syncService,
@@ -364,7 +380,6 @@ describe("Chunked batch execution", () => {
   it("executes operations in chunks under the batch limit", async () => {
     const mockDb = {} as unknown as import("firebase/firestore").Firestore;
 
-    // We pass batchLimit = 3 to test chunking
     const operations: ChunkedOperation[] = [
       { type: "set", ref: "ref-1", data: { a: 1 } },
       { type: "set", ref: "ref-2", data: { a: 2 } },
@@ -378,6 +393,191 @@ describe("Chunked batch execution", () => {
     expect(mockBatchCommit).toHaveBeenCalledTimes(2);
     expect(mockBatchSet).toHaveBeenCalledTimes(3);
     expect(mockBatchDelete).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("1 MiB Document Size Guard & Safe Fallback", () => {
+  it("accurately estimates serialized JSON byte sizes", () => {
+    const smallObject = { key: "value" };
+    const size = estimateDataSize(smallObject);
+    expect(size).toBe(new TextEncoder().encode(JSON.stringify(smallObject)).length);
+    expect(size).toBeGreaterThan(0);
+  });
+
+  it("enforces safe limit threshold below Firestore 1 MiB hard limit", () => {
+    expect(FIRESTORE_DOC_SAFE_LIMIT_BYTES).toBeLessThan(FIRESTORE_DOC_MAX_BYTES);
+    expect(FIRESTORE_DOC_SAFE_LIMIT_BYTES).toBe(900 * 1024);
+    expect(FIRESTORE_DOC_MAX_BYTES).toBe(1048576);
+  });
+
+  it("identifies oversized datasets exceeding safe threshold", () => {
+    const largeLibrary: Record<string, unknown> = {};
+    for (let i = 0; i < 6000; i++) {
+      largeLibrary[`series-${i}`] = {
+        seriesId: `series-${i}`,
+        status: "reading",
+        title: `Manga Title Number ${i} With Long Detailed Metadata Description String`,
+        addedAt: "2026-10-01T00:00:00.000Z",
+      };
+    }
+    const byteSize = estimateDataSize({ library: largeLibrary });
+    expect(byteSize).toBeGreaterThan(FIRESTORE_DOC_SAFE_LIMIT_BYTES);
+  });
+});
+
+describe("Delayed reconciliation protection", () => {
+  it("aborts reconciliation when server is already at a newer revision", async () => {
+    const mockDb = {} as unknown as import("firebase/firestore").Firestore;
+    const mockUser = { uid: "test-user" } as unknown as import("firebase/auth").User;
+
+    const sampleUserData: UserData = {
+      version: USER_DATA_VERSION,
+      library: {
+        "series-a": { seriesId: "series-a", status: "reading", addedAt: "2026-10-01" },
+      },
+      progress: {},
+      readerModes: {},
+      savedTitles: {},
+      seeded: true,
+    };
+
+    // Calling reconcile with targetRevision 4 when server is at 5 should safely abort
+    // without invoking subcollection batch writes
+    mockBatchCommit.mockClear();
+
+    mockGetDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ revision: 5 }),
+    });
+
+    await syncService.reconcileSubcollections(
+      mockDb,
+      mockUser,
+      0, // reconciliationId
+      4, // targetRevision (older than server revision 5)
+      sampleUserData
+    );
+
+    // Because targetRevision (4) < server revision (5), no batch commits should occur
+    expect(mockBatchCommit).not.toHaveBeenCalled();
+  });
+});
+
+describe("Concurrency & Interrupted Write Resilience", () => {
+  const sampleLocal: UserData = {
+    version: USER_DATA_VERSION,
+    library: {
+      "local-series": {
+        seriesId: "local-series",
+        status: "reading",
+        addedAt: "2026-10-10T00:00:00.000Z",
+      },
+    },
+    progress: {},
+    readerModes: {},
+    savedTitles: {},
+    seeded: true,
+  };
+
+  it("safely retries and resolves revision conflicts during concurrent writes", async () => {
+    const mockDb = {} as unknown as import("firebase/firestore").Firestore;
+    const mockUser = {
+      uid: "concurrent-user",
+      isAnonymous: true,
+      metadata: {},
+    } as unknown as import("firebase/auth").User;
+
+    let attemptCount = 0;
+
+    mockGetDoc.mockImplementation(async () => {
+      attemptCount++;
+      return {
+        exists: () => true,
+        data: () => ({
+          version: USER_DATA_VERSION,
+          revision: attemptCount === 1 ? 1 : 2,
+          library: {},
+          progress: {},
+          readerModes: {},
+          savedTitles: {},
+        }),
+      };
+    });
+
+    mockRunTransaction.mockImplementation(
+      async (
+        _db: unknown,
+        updateFunction: (tx: {
+          get: (ref: unknown) => Promise<{ exists: () => boolean; data: () => { revision: number } }>;
+          set: (ref: unknown, data: unknown, options?: unknown) => void;
+        }) => Promise<number>
+      ) => {
+        if (attemptCount === 1) {
+          throw new Error("Revision conflict: expected revision 1, but server is at 2");
+        }
+        const fakeTx = {
+          get: vi.fn().mockResolvedValue({
+            exists: () => true,
+            data: () => ({ revision: 2 }),
+          }),
+          set: vi.fn(),
+        };
+        return updateFunction(fakeTx);
+      }
+    );
+
+    const result = await syncService.atomicSyncOrPush(mockDb, mockUser, sampleLocal, 3);
+    expect(result.library["local-series"]).toBeDefined();
+    expect(attemptCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("preserves authoritative consistency even if subcollection reconciliation fails", async () => {
+    const mockDb = {} as unknown as import("firebase/firestore").Firestore;
+    const mockUser = {
+      uid: "interrupted-user",
+      isAnonymous: true,
+      metadata: {},
+    } as unknown as import("firebase/auth").User;
+
+    mockGetDoc.mockResolvedValue({
+      exists: () => true,
+      data: () => ({
+        version: USER_DATA_VERSION,
+        revision: 1,
+        library: {},
+        progress: {},
+        readerModes: {},
+        savedTitles: {},
+      }),
+    });
+
+    mockRunTransaction.mockImplementation(
+      async (
+        _db: unknown,
+        updateFunction: (tx: {
+          get: (ref: unknown) => Promise<{ exists: () => boolean; data: () => { revision: number } }>;
+          set: (ref: unknown, data: unknown, options?: unknown) => void;
+        }) => Promise<number>
+      ) => {
+        const fakeTx = {
+          get: vi.fn().mockResolvedValue({
+            exists: () => true,
+            data: () => ({ revision: 1 }),
+          }),
+          set: vi.fn(),
+        };
+        return updateFunction(fakeTx);
+      }
+    );
+
+    // Make batch commit reject to simulate interrupted subcollection write
+    mockBatchCommit.mockRejectedValueOnce(
+      new Error("Network connection lost during subcollection reconciliation")
+    );
+
+    // The atomicSyncOrPush itself MUST succeed because authoritative state committed FIRST
+    const result = await syncService.atomicSyncOrPush(mockDb, mockUser, sampleLocal);
+    expect(result.library["local-series"]).toBeDefined();
   });
 });
 
