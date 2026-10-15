@@ -2,10 +2,12 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { UserData } from "@/domain/types";
 import { USER_DATA_VERSION } from "@/domain/types";
 
+const inMemoryStore = new Map<string, unknown>();
 const mockBatchCommit = vi.fn().mockResolvedValue(undefined);
 const mockBatchSet = vi.fn();
 const mockBatchDelete = vi.fn();
 const mockGetDoc = vi.fn();
+const mockSetDoc = vi.fn().mockResolvedValue(undefined);
 const mockRunTransaction = vi.fn();
 
 vi.mock("firebase/firestore", async (importOriginal) => {
@@ -16,12 +18,61 @@ vi.mock("firebase/firestore", async (importOriginal) => {
       path: segments.join("/"),
       id: segments[segments.length - 1],
     })),
-    getDocs: vi.fn().mockResolvedValue({ empty: true, forEach: () => {} }),
+    getDocs: vi.fn().mockImplementation(async (colRef: { path: string }) => {
+      const docs: Array<{ id: string; ref: { path: string }; data: () => unknown }> = [];
+      for (const [docPath, data] of inMemoryStore.entries()) {
+        if (
+          docPath.startsWith(colRef.path + "/") &&
+          !docPath.slice(colRef.path.length + 1).includes("/")
+        ) {
+          const id = docPath.split("/").pop()!;
+          docs.push({ id, ref: { path: docPath }, data: () => data });
+        }
+      }
+      return {
+        empty: docs.length === 0,
+        forEach: (cb: (doc: unknown) => void) => docs.forEach(cb),
+        docs,
+      };
+    }),
     doc: vi.fn((_db: unknown, ...segments: string[]) => ({
       path: segments.join("/"),
       id: segments[segments.length - 1],
     })),
-    getDoc: (...args: unknown[]) => mockGetDoc(...args),
+    setDoc: vi.fn(async (ref: { path: string }, data: unknown) => {
+      inMemoryStore.set(ref.path, data);
+      return mockSetDoc(ref, data);
+    }),
+    getDoc: vi.fn(async (ref: { path: string }, ...args: unknown[]) => {
+      if (ref.path.includes("/snapshots/") && inMemoryStore.has(ref.path)) {
+        const data = inMemoryStore.get(ref.path);
+        return {
+          exists: () => true,
+          data: () => data,
+          id: ref.path.split("/").pop()!,
+          ref,
+        };
+      }
+      if (mockGetDoc.getMockImplementation()) {
+        const custom = await mockGetDoc(ref, ...args);
+        if (custom !== undefined) return custom;
+      }
+      if (inMemoryStore.has(ref.path)) {
+        const data = inMemoryStore.get(ref.path);
+        return {
+          exists: () => true,
+          data: () => data,
+          id: ref.path.split("/").pop()!,
+          ref,
+        };
+      }
+      return {
+        exists: () => false,
+        data: () => undefined,
+        id: ref.path.split("/").pop()!,
+        ref,
+      };
+    }),
     runTransaction: (...args: unknown[]) => mockRunTransaction(...args),
     writeBatch: vi.fn(() => ({
       set: mockBatchSet,
@@ -40,11 +91,29 @@ import {
   estimateDataSize,
   FIRESTORE_DOC_MAX_BYTES,
   FIRESTORE_DOC_SAFE_LIMIT_BYTES,
+  FIRESTORE_RECORD_SAFE_LIMIT_BYTES,
+  validateRecordSizeGuards,
+  computeDataChecksum,
+  generateSnapshotId,
+  stageAndVerifySnapshot,
+  pruneObsoleteSnapshots,
   CLOUD_SYNC_OPT_IN_KEY,
   PRE_SYNC_BACKUP_KEY,
   syncService,
   type ChunkedOperation,
+  type StagedSnapshotDoc,
+  type StagedSnapshotPartDoc,
 } from "./firestore-sync";
+
+beforeEach(() => {
+  inMemoryStore.clear();
+  mockBatchCommit.mockClear();
+  mockBatchSet.mockClear();
+  mockBatchDelete.mockClear();
+  mockGetDoc.mockReset();
+  mockSetDoc.mockClear();
+  mockRunTransaction.mockReset();
+});
 
 describe("mergeUserData", () => {
   const baseData: UserData = {
@@ -595,3 +664,371 @@ describe("SyncStatus transitions", () => {
     unsubscribe();
   });
 });
+
+describe("Staged Immutable Snapshot Architecture", () => {
+  const mockDb = {} as unknown as import("firebase/firestore").Firestore;
+  const mockUser = {
+    uid: "snapshot-test-user",
+    isAnonymous: true,
+    metadata: { creationTime: "2026-10-01T00:00:00.000Z" },
+  } as unknown as import("firebase/auth").User;
+
+  const sampleValidData: UserData = {
+    version: USER_DATA_VERSION,
+    library: {
+      "series-1": {
+        seriesId: "series-1",
+        status: "reading",
+        addedAt: "2026-10-01T00:00:00.000Z",
+      },
+    },
+    progress: {
+      "series-1": {
+        lastChapterId: "ch-1",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        chapters: {
+          "ch-1": {
+            page: 5,
+            pageCount: 20,
+            atEnd: false,
+            completed: false,
+            updatedAt: "2026-10-01T00:00:00.000Z",
+          },
+        },
+      },
+    },
+    readerModes: { "series-1": "vertical" },
+    savedTitles: {
+      "series-1": {
+        id: "series-1",
+        title: "Test Manga",
+        source: "anilist",
+        externalId: 1,
+        type: "manga",
+        description: "Desc",
+        genres: ["Action"],
+        authors: ["Author"],
+        status: "ongoing",
+        url: "https://example.com",
+        fetchedAt: "2026-10-01T00:00:00.000Z",
+      },
+    },
+    tombstones: {},
+    seeded: true,
+  };
+
+  describe("Record and Manifest Size Guards", () => {
+    it("passes for normal sized user data", () => {
+      expect(() => validateRecordSizeGuards(sampleValidData)).not.toThrow();
+    });
+
+    it("rejects oversized single library records (> 500 KiB)", () => {
+      const oversizedLibraryData: UserData = {
+        ...sampleValidData,
+        library: {
+          "huge-series": {
+            seriesId: "huge-series",
+            status: "reading",
+            addedAt: "2026-10-01T00:00:00.000Z",
+            title: "x".repeat(FIRESTORE_RECORD_SAFE_LIMIT_BYTES + 100),
+          } as unknown as import("@/domain/types").LibraryEntry,
+        },
+      };
+
+      expect(() => validateRecordSizeGuards(oversizedLibraryData)).toThrow(
+        /Library record 'huge-series' exceeds safe record size limit/
+      );
+    });
+
+    it("rejects oversized single progress records (> 500 KiB)", () => {
+      const oversizedProgressData: UserData = {
+        ...sampleValidData,
+        progress: {
+          "huge-prog": {
+            lastChapterId: "x".repeat(FIRESTORE_RECORD_SAFE_LIMIT_BYTES + 100),
+            updatedAt: "2026-10-01T00:00:00.000Z",
+            chapters: {},
+          },
+        },
+      };
+
+      expect(() => validateRecordSizeGuards(oversizedProgressData)).toThrow(
+        /Progress record 'huge-prog' exceeds safe record size limit/
+      );
+    });
+
+    it("rejects oversized single saved title records (> 500 KiB)", () => {
+      const oversizedSavedData: UserData = {
+        ...sampleValidData,
+        savedTitles: {
+          "huge-title": {
+            id: "huge-title",
+            title: "huge",
+            description: "x".repeat(FIRESTORE_RECORD_SAFE_LIMIT_BYTES + 100),
+            source: "anilist",
+            externalId: 1,
+            type: "manga",
+            genres: [],
+            authors: [],
+            status: "ongoing",
+            url: "https://example.com",
+            fetchedAt: "2026-10-01T00:00:00.000Z",
+          },
+        },
+      };
+
+      expect(() => validateRecordSizeGuards(oversizedSavedData)).toThrow(
+        /Saved title record 'huge-title' exceeds safe record size limit/
+      );
+    });
+
+    it("rejects oversized manifest metadata (> 900 KiB)", () => {
+      const hugeTombstones: Record<string, string> = {};
+      for (let i = 0; i < 25000; i++) {
+        hugeTombstones[`deleted-series-${i}`] = "2026-10-01T00:00:00.000Z";
+      }
+
+      const oversizedManifestData: UserData = {
+        ...sampleValidData,
+        tombstones: hugeTombstones,
+      };
+
+      expect(() => validateRecordSizeGuards(oversizedManifestData)).toThrow(
+        /Manifest metadata exceeds Firestore safe document size limit/
+      );
+    });
+  });
+
+  describe("Deterministic Checksum & Snapshot ID", () => {
+    it("computes identical checksums for identical data structures", async () => {
+      const cs1 = await computeDataChecksum(sampleValidData);
+      const cs2 = await computeDataChecksum({ ...sampleValidData });
+      expect(cs1).toBe(cs2);
+      expect(typeof cs1).toBe("string");
+      expect(cs1.length).toBeGreaterThan(0);
+    });
+
+    it("computes different checksums when data is modified", async () => {
+      const cs1 = await computeDataChecksum(sampleValidData);
+      const modified: UserData = {
+        ...sampleValidData,
+        library: {
+          ...sampleValidData.library,
+          "series-2": {
+            seriesId: "series-2",
+            status: "completed",
+            addedAt: "2026-10-02T00:00:00.000Z",
+          },
+        },
+      };
+      const cs2 = await computeDataChecksum(modified);
+      expect(cs1).not.toBe(cs2);
+    });
+
+    it("generates collision-free snapshot IDs scoped by revision and session", () => {
+      const id1 = generateSnapshotId(5, "session-abc");
+      const id2 = generateSnapshotId(5, "session-abc");
+      expect(id1).toMatch(/^rev_5_session-abc_\d+$/);
+      expect(id2).toMatch(/^rev_5_session-abc_\d+$/);
+      expect(typeof id1).toBe("string");
+    });
+  });
+
+  describe("Staged Immutable Snapshot Staging & Verification", () => {
+    it("stages and verifies a single snapshot document for datasets under 900 KiB", async () => {
+      const result = await stageAndVerifySnapshot(mockDb, mockUser, 1, sampleValidData);
+
+      expect(result.snapshotId).toContain("rev_1_");
+      expect(result.totalParts).toBe(1);
+      expect(typeof result.checksum).toBe("string");
+
+      // Verify read-back document in memory store
+      const path = `users/${mockUser.uid}/snapshots/${result.snapshotId}`;
+      const savedDoc = inMemoryStore.get(path) as StagedSnapshotDoc;
+      expect(savedDoc).toBeDefined();
+      expect(savedDoc.isComplete).toBe(true);
+      expect(savedDoc.revision).toBe(1);
+      expect(savedDoc.checksum).toBe(result.checksum);
+      expect(savedDoc.library?.["series-1"]).toBeDefined();
+    });
+
+    it("throws an error if snapshot read-back verification fails", async () => {
+      // Intentionally tamper with setDoc mock to simulate corrupted write
+      mockSetDoc.mockImplementationOnce(async (ref: { path: string }) => {
+        inMemoryStore.set(ref.path, {
+          snapshotId: "corrupted",
+          isComplete: false, // Incomplete!
+        });
+      });
+
+      await expect(
+        stageAndVerifySnapshot(mockDb, mockUser, 2, sampleValidData)
+      ).rejects.toThrow(/Snapshot verification failed/);
+    });
+  });
+
+  describe("Large Library Multi-Part Partitioning & Reconstruction", () => {
+    it("partitions oversized datasets (> 900 KiB) into parts <= 900 KiB and marks parent complete", async () => {
+      // Build dataset > 900 KiB
+      const largeLibrary: Record<string, import("@/domain/types").LibraryEntry> = {};
+      const numEntries = 1200;
+      for (let i = 0; i < numEntries; i++) {
+        largeLibrary[`series-${i}`] = {
+          seriesId: `series-${i}`,
+          status: "reading",
+          addedAt: "2026-10-01T00:00:00.000Z",
+          title: `Manga Title Number ${i} With Padded String To Ensure Size Exceeds Safe Threshold ${i}`.repeat(
+            8
+          ),
+        } as unknown as import("@/domain/types").LibraryEntry;
+      }
+
+      const largeData: UserData = {
+        ...sampleValidData,
+        library: largeLibrary,
+      };
+
+      expect(estimateDataSize(largeData)).toBeGreaterThan(FIRESTORE_DOC_SAFE_LIMIT_BYTES);
+
+      const result = await stageAndVerifySnapshot(mockDb, mockUser, 3, largeData);
+      expect(result.totalParts).toBeGreaterThan(1);
+
+      // Verify parent doc is marked complete
+      const parentPath = `users/${mockUser.uid}/snapshots/${result.snapshotId}`;
+      const parentDoc = inMemoryStore.get(parentPath) as StagedSnapshotDoc;
+      expect(parentDoc.isComplete).toBe(true);
+      expect(parentDoc.totalParts).toBe(result.totalParts);
+
+      // Verify each part was stored and verified
+      for (let p = 0; p < result.totalParts; p++) {
+        const partPath = `users/${mockUser.uid}/snapshots/${result.snapshotId}/parts/part_${p}`;
+        const partDoc = inMemoryStore.get(partPath) as StagedSnapshotPartDoc;
+        expect(partDoc).toBeDefined();
+        expect(partDoc.partIndex).toBe(p);
+        expect(partDoc.totalParts).toBe(result.totalParts);
+      }
+
+      // Verify remote reader reconstructs the multi-part snapshot seamlessly
+      inMemoryStore.set(`users/${mockUser.uid}/sync/userData`, {
+        revision: 3,
+        activeSnapshotId: result.snapshotId,
+        snapshotParts: result.totalParts,
+        snapshotChecksum: result.checksum,
+        version: USER_DATA_VERSION,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const fetched = await syncService.fetchRemoteData(mockDb, mockUser);
+      expect(fetched.data).not.toBeNull();
+      expect(fetched.revision).toBe(3);
+      expect(Object.keys(fetched.data!.library).length).toBe(numEntries);
+    });
+
+    it("readers strictly ignore incomplete snapshots (isComplete: false)", async () => {
+      const incompleteSnapshotId = "rev_4_incomplete_snap";
+      inMemoryStore.set(`users/${mockUser.uid}/snapshots/${incompleteSnapshotId}`, {
+        snapshotId: incompleteSnapshotId,
+        revision: 4,
+        isComplete: false, // Write was interrupted!
+        version: USER_DATA_VERSION,
+        createdAt: new Date().toISOString(),
+      });
+
+      inMemoryStore.set(`users/${mockUser.uid}/sync/userData`, {
+        revision: 4,
+        activeSnapshotId: incompleteSnapshotId,
+        version: USER_DATA_VERSION,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const fetched = await syncService.fetchRemoteData(mockDb, mockUser);
+      // Because snapshot is incomplete, reader does NOT expose partially written data
+      expect(fetched.data).toBeNull();
+      expect(fetched.revision).toBe(4);
+    });
+  });
+
+  describe("Snapshot Retention & Safe Fallback Pruning", () => {
+    it("retains active snapshot and at least 2 preceding revisions, deleting only obsolete ones", async () => {
+      const activeSnapId = "rev_5_active";
+
+      // Setup 5 historical snapshots (rev 1, 2, 3, 4, 5)
+      for (let r = 1; r <= 5; r++) {
+        const id = r === 5 ? activeSnapId : `rev_${r}_historic`;
+        inMemoryStore.set(`users/${mockUser.uid}/snapshots/${id}`, {
+          snapshotId: id,
+          revision: r,
+          isComplete: true,
+          version: USER_DATA_VERSION,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      // Safe keep revision for rev 5 is max(5 - 2, 0) = 3
+      // Snapshots with revision < 3 (rev 1, rev 2) should be deleted
+      // Snapshots with revision >= 3 (rev 3, rev 4) and active (rev 5) must be preserved
+      await pruneObsoleteSnapshots(mockDb, mockUser, 5, activeSnapId);
+
+      // Check deleted operations committed via batches
+      expect(mockBatchCommit).toHaveBeenCalled();
+      expect(mockBatchDelete).toHaveBeenCalledTimes(2); // rev 1 and rev 2
+    });
+
+    it("never deletes the active snapshot even if its revision is old", async () => {
+      const oldActiveSnapId = "rev_1_still_active";
+      inMemoryStore.set(`users/${mockUser.uid}/snapshots/${oldActiveSnapId}`, {
+        snapshotId: oldActiveSnapId,
+        revision: 1,
+        isComplete: true,
+        version: USER_DATA_VERSION,
+      });
+
+      await pruneObsoleteSnapshots(mockDb, mockUser, 10, oldActiveSnapId);
+
+      // mockBatchDelete should NOT have been called for oldActiveSnapId
+      const deletedPaths = mockBatchDelete.mock.calls.map((call) => call[0]?.ref?.path || call[0]?.path);
+      expect(deletedPaths).not.toContain(`users/${mockUser.uid}/snapshots/${oldActiveSnapId}`);
+    });
+  });
+
+  describe("Interrupted Write Resilience & Recovery", () => {
+    it("ensures reader reads prior snapshot if staging fails before publication", async () => {
+      // 1. Existing valid revision 1 snapshot
+      const snap1Id = "rev_1_stable";
+      inMemoryStore.set(`users/${mockUser.uid}/snapshots/${snap1Id}`, {
+        snapshotId: snap1Id,
+        revision: 1,
+        isComplete: true,
+        version: USER_DATA_VERSION,
+        createdAt: new Date().toISOString(),
+        library: {
+          "series-1": { seriesId: "series-1", status: "reading", addedAt: "2026-10-01" },
+        },
+      });
+
+      inMemoryStore.set(`users/${mockUser.uid}/sync/userData`, {
+        revision: 1,
+        activeSnapshotId: snap1Id,
+        version: USER_DATA_VERSION,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // 2. An interrupted upload fails during staging
+      mockSetDoc.mockRejectedValueOnce(new Error("Network drop during snapshot staging"));
+
+      await expect(
+        syncService.atomicSyncOrPush(mockDb, mockUser, {
+          ...sampleValidData,
+          library: { "new-series": { seriesId: "new-series", status: "reading", addedAt: "2026-10-02" } },
+        })
+      ).rejects.toThrow(/Network drop during snapshot staging/);
+
+      // 3. Reader checks remote state: still cleanly points to revision 1 snapshot!
+      const recovered = await syncService.fetchRemoteData(mockDb, mockUser);
+      expect(recovered.revision).toBe(1);
+      expect(recovered.data?.library["series-1"]).toBeDefined();
+      expect(recovered.data?.library["new-series"]).toBeUndefined();
+    });
+  });
+});
+

@@ -77,6 +77,36 @@ rules_version = '2';
 //   - reportedChapters: number (optional, >= 0) - Reported chapter count
 //   - url: string (optional, 1-2000 chars) - Source URL
 //
+// Collection: users/{userId}/snapshots
+// Document ID: {snapshotId}
+// Fields:
+//   - snapshotId: string (required, 1-128 chars, matches snapshotId in path, immutable)
+//   - revision: number (required, >= 0, immutable)
+//   - createdAt: string or timestamp (required, immutable)
+//   - isComplete: bool (required, immutable)
+//   - version: number (required, 1-1000, immutable)
+//   - checksum: string (optional, <= 64 chars, immutable)
+//   - totalParts: number (optional, >= 1, immutable)
+//   - library: map (optional, immutable)
+//   - progress: map (optional, immutable)
+//   - readerModes: map (optional, immutable)
+//   - savedTitles: map (optional, immutable)
+//   - tombstones: map (optional, immutable)
+//   - seeded: bool (optional, immutable)
+//
+// Collection: users/{userId}/snapshots/{snapshotId}/parts
+// Document ID: {partId}
+// Fields:
+//   - partId: string (required, 1-128 chars, matches partId in path, immutable)
+//   - snapshotId: string (required, 1-128 chars, immutable)
+//   - partIndex: number (required, >= 0, immutable)
+//   - totalParts: number (required, >= 1, immutable)
+//   - library: map (optional, immutable)
+//   - progress: map (optional, immutable)
+//   - savedTitles: map (optional, immutable)
+//   - checksum: string (optional, <= 64 chars, immutable)
+//   - createdAt: string or timestamp (optional, immutable)
+//
 // Collection: users/{userId}/sync
 // Document ID: 'userData' (singleton backup aggregate)
 // Fields:
@@ -91,6 +121,10 @@ rules_version = '2';
 //   - readerModes: map (optional) - Serialized reader modes map
 //   - savedTitles: map (optional) - Serialized saved titles map
 //   - seeded: bool (optional) - Seed state flag
+//   - activeSnapshotId: string (optional, <= 128 chars) - Active snapshot reference
+//   - snapshotChecksum: string (optional, <= 64 chars) - Active snapshot checksum
+//   - snapshotParts: number (optional, >= 1) - Number of snapshot parts
+//   - manifest: map (optional) - Multi-part snapshot manifest
 //
 // ===============================================================
 
@@ -228,11 +262,53 @@ service cloud.firestore {
         (!('url' in data) || (data.url is string && data.url.size() <= 2000));
     }
 
+    function isValidSnapshot(data, snapshotId) {
+      let allowedFields = [
+        'snapshotId', 'revision', 'createdAt', 'isComplete', 'version',
+        'checksum', 'totalParts', 'library', 'progress', 'readerModes',
+        'savedTitles', 'tombstones', 'seeded'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['snapshotId', 'revision', 'createdAt', 'isComplete', 'version']) &&
+        data.snapshotId is string && data.snapshotId == snapshotId && data.snapshotId.size() > 0 && data.snapshotId.size() <= 128 &&
+        data.revision is number && data.revision >= 0 &&
+        data.isComplete is bool &&
+        data.version is number && data.version >= 1 && data.version <= 1000 &&
+        isValidDate(data.createdAt) &&
+        (!('checksum' in data) || (data.checksum is string && data.checksum.size() <= 64)) &&
+        (!('totalParts' in data) || (data.totalParts is number && data.totalParts >= 1)) &&
+        (!('library' in data) || (data.library is map)) &&
+        (!('progress' in data) || (data.progress is map)) &&
+        (!('readerModes' in data) || (data.readerModes is map)) &&
+        (!('savedTitles' in data) || (data.savedTitles is map)) &&
+        (!('tombstones' in data) || (data.tombstones is map)) &&
+        (!('seeded' in data) || (data.seeded is bool));
+    }
+
+    function isValidSnapshotPart(data, partId) {
+      let allowedFields = [
+        'partId', 'snapshotId', 'partIndex', 'totalParts',
+        'library', 'progress', 'savedTitles', 'checksum', 'createdAt'
+      ];
+      return data.keys().hasOnly(allowedFields) &&
+        data.keys().hasAll(['partId', 'snapshotId', 'partIndex', 'totalParts']) &&
+        data.partId is string && data.partId == partId && data.partId.size() > 0 && data.partId.size() <= 128 &&
+        data.snapshotId is string && data.snapshotId.size() > 0 && data.snapshotId.size() <= 128 &&
+        data.partIndex is number && data.partIndex >= 0 &&
+        data.totalParts is number && data.totalParts >= 1 &&
+        (!('checksum' in data) || (data.checksum is string && data.checksum.size() <= 64)) &&
+        (!('createdAt' in data) || isValidDate(data.createdAt)) &&
+        (!('library' in data) || (data.library is map)) &&
+        (!('progress' in data) || (data.progress is map)) &&
+        (!('savedTitles' in data) || (data.savedTitles is map));
+    }
+
     function isValidSyncData(data) {
       let allowedFields = [
         'version', 'updatedAt', 'library', 'progress',
         'readerModes', 'savedTitles', 'seeded',
-        'revision', 'syncStatus', 'syncSessionId', 'tombstones'
+        'revision', 'syncStatus', 'syncSessionId', 'tombstones',
+        'activeSnapshotId', 'snapshotChecksum', 'snapshotParts', 'manifest'
       ];
       return data.keys().hasOnly(allowedFields) &&
         data.keys().hasAll(['version', 'updatedAt']) &&
@@ -246,7 +322,11 @@ service cloud.firestore {
         (!('progress' in data) || (data.progress is map)) &&
         (!('readerModes' in data) || (data.readerModes is map)) &&
         (!('savedTitles' in data) || (data.savedTitles is map)) &&
-        (!('seeded' in data) || (data.seeded is bool));
+        (!('seeded' in data) || (data.seeded is bool)) &&
+        (!('activeSnapshotId' in data) || (data.activeSnapshotId is string && data.activeSnapshotId.size() <= 128)) &&
+        (!('snapshotChecksum' in data) || (data.snapshotChecksum is string && data.snapshotChecksum.size() <= 64)) &&
+        (!('snapshotParts' in data) || (data.snapshotParts is number && data.snapshotParts >= 1)) &&
+        (!('manifest' in data) || (data.manifest is map));
     }
 
     // ===============================================================
@@ -317,6 +397,20 @@ service cloud.firestore {
           isValidSavedTitle(request.resource.data, mediaId) &&
           (!('mediaId' in resource.data) || request.resource.data.mediaId == resource.data.mediaId) &&
           (!('id' in resource.data) || request.resource.data.id == resource.data.id);
+      }
+
+      // Snapshots subcollection (immutable staged snapshots)
+      match /snapshots/{snapshotId} {
+        allow read, delete: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidSnapshot(request.resource.data, snapshotId);
+        allow update: if false; // Snapshots are strictly immutable once written!
+
+        // Snapshot parts subcollection (immutable staged multi-part chunks)
+        match /parts/{partId} {
+          allow read, delete: if isOwner(userId);
+          allow create: if isOwner(userId) && isValidSnapshotPart(request.resource.data, partId);
+          allow update: if false; // Snapshot parts are strictly immutable once written!
+        }
       }
 
       // Full sync aggregate document

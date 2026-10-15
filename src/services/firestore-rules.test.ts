@@ -726,5 +726,359 @@ describe("Firestore Security Rules for MangaReader", () => {
         ),
       ).resolves.toBeDefined();
     });
+
+    it("allows writing activeSnapshotId, snapshotChecksum, snapshotParts, and manifest to userData", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertSucceeds(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            activeSnapshotId: "snap-rev-10-abcd",
+            snapshotChecksum: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            snapshotParts: 3,
+            manifest: {
+              parts: 3,
+              totalBytes: 154000,
+            },
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it("rejects activeSnapshotId longer than 128 characters", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            activeSnapshotId: "a".repeat(129),
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshotParts less than 1", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            snapshotParts: 0,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects manifest field when not a map", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const syncRef = doc(userA, "users/userA/sync/userData");
+
+      await expect(
+        assertFails(
+          setDoc(syncRef, {
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            manifest: "invalid-manifest-string",
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------
+  // 8. Staged Immutable Snapshot Architecture Validation
+  // -------------------------------------------------------------
+  describe("Staged Immutable Snapshot Architecture Validation", () => {
+    it("allows owner to create a valid immutable snapshot", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-001");
+
+      const now = new Date().toISOString();
+      await expect(
+        assertSucceeds(
+          setDoc(snapRef, {
+            snapshotId: "snap-001",
+            revision: 1,
+            createdAt: now,
+            isComplete: true,
+            version: 3,
+            checksum: "a1b2c3d4e5f6",
+            totalParts: 1,
+            library: {},
+            progress: {},
+            readerModes: {},
+            savedTitles: {},
+            tombstones: {},
+            seeded: false,
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it("strictly forbids updating an existing snapshot (immutability check)", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), "users/userA/snapshots/snap-001"), {
+          snapshotId: "snap-001",
+          revision: 1,
+          createdAt: now,
+          isComplete: true,
+          version: 3,
+        });
+      });
+
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-001");
+
+      await expect(
+        assertFails(
+          updateDoc(snapRef, {
+            isComplete: false,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshot when snapshotId does not match document ID", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-001");
+
+      await expect(
+        assertFails(
+          setDoc(snapRef, {
+            snapshotId: "mismatched-id",
+            revision: 1,
+            createdAt: new Date().toISOString(),
+            isComplete: true,
+            version: 3,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshot with negative revision or version out of bounds", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-002");
+
+      // Negative revision
+      await expect(
+        assertFails(
+          setDoc(snapRef, {
+            snapshotId: "snap-002",
+            revision: -1,
+            createdAt: new Date().toISOString(),
+            isComplete: true,
+            version: 3,
+          }),
+        ),
+      ).resolves.toBeDefined();
+
+      // Zero version
+      await expect(
+        assertFails(
+          setDoc(snapRef, {
+            snapshotId: "snap-002",
+            revision: 0,
+            createdAt: new Date().toISOString(),
+            version: 0,
+            isComplete: true,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshot with unauthorized field (schema pollution)", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-003");
+
+      await expect(
+        assertFails(
+          setDoc(snapRef, {
+            snapshotId: "snap-003",
+            revision: 1,
+            createdAt: new Date().toISOString(),
+            isComplete: true,
+            version: 3,
+            unauthorizedKey: "malicious payload",
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("allows owner to create a valid immutable snapshot part", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const partRef = doc(userA, "users/userA/snapshots/snap-multi/parts/part-0");
+
+      await expect(
+        assertSucceeds(
+          setDoc(partRef, {
+            partId: "part-0",
+            snapshotId: "snap-multi",
+            partIndex: 0,
+            totalParts: 2,
+            library: {},
+            progress: {},
+            savedTitles: {},
+            checksum: "part0hash",
+            createdAt: new Date().toISOString(),
+          }),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it("strictly forbids updating an existing snapshot part (immutability check)", async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), "users/userA/snapshots/snap-multi/parts/part-0"), {
+          partId: "part-0",
+          snapshotId: "snap-multi",
+          partIndex: 0,
+          totalParts: 2,
+        });
+      });
+
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const partRef = doc(userA, "users/userA/snapshots/snap-multi/parts/part-0");
+
+      await expect(
+        assertFails(
+          updateDoc(partRef, {
+            totalParts: 3,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshot part when partId does not match document ID", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const partRef = doc(userA, "users/userA/snapshots/snap-multi/parts/part-1");
+
+      await expect(
+        assertFails(
+          setDoc(partRef, {
+            partId: "mismatched-part-id",
+            snapshotId: "snap-multi",
+            partIndex: 1,
+            totalParts: 2,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("rejects snapshot part with invalid partIndex or totalParts < 1", async () => {
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const partRef = doc(userA, "users/userA/snapshots/snap-multi/parts/part-0");
+
+      // Negative partIndex
+      await expect(
+        assertFails(
+          setDoc(partRef, {
+            partId: "part-0",
+            snapshotId: "snap-multi",
+            partIndex: -1,
+            totalParts: 2,
+          }),
+        ),
+      ).resolves.toBeDefined();
+
+      // Zero totalParts
+      await expect(
+        assertFails(
+          setDoc(partRef, {
+            partId: "part-0",
+            snapshotId: "snap-multi",
+            partIndex: 0,
+            totalParts: 0,
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("prevents non-owner from reading, writing, or deleting snapshots and snapshot parts", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, "users/userA/snapshots/snap-secret"), {
+          snapshotId: "snap-secret",
+          revision: 1,
+          createdAt: now,
+          isComplete: true,
+          version: 3,
+        });
+        await setDoc(doc(db, "users/userA/snapshots/snap-secret/parts/part-0"), {
+          partId: "part-0",
+          snapshotId: "snap-secret",
+          partIndex: 0,
+          totalParts: 1,
+        });
+      });
+
+      const userB = testEnv.authenticatedContext("userB").firestore();
+      const snapRef = doc(userB, "users/userA/snapshots/snap-secret");
+      const partRef = doc(userB, "users/userA/snapshots/snap-secret/parts/part-0");
+
+      // Read attempts
+      await expect(assertFails(getDoc(snapRef))).resolves.toBeDefined();
+      await expect(assertFails(getDocs(collection(userB, "users/userA/snapshots")))).resolves.toBeDefined();
+      await expect(assertFails(getDoc(partRef))).resolves.toBeDefined();
+
+      // Write attempts
+      await expect(
+        assertFails(
+          setDoc(doc(userB, "users/userA/snapshots/snap-attacker"), {
+            snapshotId: "snap-attacker",
+            revision: 1,
+            createdAt: now,
+            isComplete: true,
+            version: 3,
+          }),
+        ),
+      ).resolves.toBeDefined();
+
+      // Delete attempts
+      await expect(assertFails(deleteDoc(snapRef))).resolves.toBeDefined();
+      await expect(assertFails(deleteDoc(partRef))).resolves.toBeDefined();
+    });
+
+    it("allows owner to read, list, and delete their own snapshots and snapshot parts", async () => {
+      const now = new Date().toISOString();
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, "users/userA/snapshots/snap-cleanup"), {
+          snapshotId: "snap-cleanup",
+          revision: 1,
+          createdAt: now,
+          isComplete: true,
+          version: 3,
+        });
+        await setDoc(doc(db, "users/userA/snapshots/snap-cleanup/parts/part-0"), {
+          partId: "part-0",
+          snapshotId: "snap-cleanup",
+          partIndex: 0,
+          totalParts: 1,
+        });
+      });
+
+      const userA = testEnv.authenticatedContext("userA").firestore();
+      const snapRef = doc(userA, "users/userA/snapshots/snap-cleanup");
+      const partRef = doc(userA, "users/userA/snapshots/snap-cleanup/parts/part-0");
+
+      // Read & list
+      await expect(assertSucceeds(getDoc(snapRef))).resolves.toBeDefined();
+      await expect(assertSucceeds(getDocs(collection(userA, "users/userA/snapshots")))).resolves.toBeDefined();
+      await expect(assertSucceeds(getDoc(partRef))).resolves.toBeDefined();
+
+      // Delete
+      await expect(assertSucceeds(deleteDoc(partRef))).resolves.toBeUndefined();
+      await expect(assertSucceeds(deleteDoc(snapRef))).resolves.toBeUndefined();
+    });
   });
 });
