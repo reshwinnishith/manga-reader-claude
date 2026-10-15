@@ -22,6 +22,7 @@ export const emptyUserData = (): UserData => ({
   progress: {},
   readerModes: {},
   savedTitles: {},
+  tombstones: {},
   seeded: false,
 });
 
@@ -31,9 +32,24 @@ export function addToLibrary(
   now: string,
   status: ReadingStatus = "planned",
 ): UserData {
-  if (data.library[seriesId]) return data;
-  const entry: LibraryEntry = { seriesId, status, addedAt: now };
-  return { ...data, library: { ...data.library, [seriesId]: entry } };
+  const hasTombstone = Boolean(data.tombstones && seriesId in data.tombstones);
+  if (data.library[seriesId]) {
+    if (!hasTombstone) return data;
+    const tombstones = { ...data.tombstones };
+    delete tombstones[seriesId];
+    return { ...data, tombstones };
+  }
+  let tombstones = data.tombstones;
+  if (hasTombstone) {
+    tombstones = { ...data.tombstones };
+    delete tombstones[seriesId];
+  }
+  const entry: LibraryEntry = { seriesId, status, addedAt: now, updatedAt: now };
+  return {
+    ...data,
+    library: { ...data.library, [seriesId]: entry },
+    ...(tombstones ? { tombstones } : {}),
+  };
 }
 
 /**
@@ -46,26 +62,41 @@ export function saveExternalTitle(data: UserData, title: SavedTitle, now: string
   return addToLibrary(withTitle, title.id, now);
 }
 
-export function removeFromLibrary(data: UserData, seriesId: string): UserData {
+export function removeFromLibrary(
+  data: UserData,
+  seriesId: string,
+  now: string = new Date().toISOString(),
+): UserData {
   if (!data.library[seriesId]) return data;
   const library = { ...data.library };
   delete library[seriesId];
-  return { ...data, library };
+  const tombstones = { ...data.tombstones, [seriesId]: now };
+  return { ...data, library, tombstones };
 }
 
 export function setReadingStatus(
   data: UserData,
   seriesId: string,
   status: ReadingStatus,
+  now: string = new Date().toISOString(),
 ): UserData {
   const entry = data.library[seriesId];
   if (!entry || entry.status === status) return data;
-  return { ...data, library: { ...data.library, [seriesId]: { ...entry, status } } };
+  return { ...data, library: { ...data.library, [seriesId]: { ...entry, status, updatedAt: now } } };
 }
 
-export function setReaderMode(data: UserData, seriesId: string, mode: ReaderMode): UserData {
+export function setReaderMode(
+  data: UserData,
+  seriesId: string,
+  mode: ReaderMode,
+  now: string = new Date().toISOString(),
+): UserData {
   if (data.readerModes[seriesId] === mode) return data;
-  return { ...data, readerModes: { ...data.readerModes, [seriesId]: mode } };
+  return {
+    ...data,
+    readerModes: { ...data.readerModes, [seriesId]: mode },
+    readerModeTimes: { ...data.readerModeTimes, [seriesId]: now },
+  };
 }
 
 /**
@@ -128,10 +159,15 @@ export function recordProgress(
   if (finished) status = "completed";
   else if (existing?.status === "completed") status = "completed"; // rereading: keep
 
+  // The entry's change time only moves when its status actually changes, so
+  // ordinary page turns never make a stale status look newer than a real edit.
   const entry: LibraryEntry = {
     seriesId: series.id,
     addedAt: existing?.addedAt ?? now,
     status,
+    ...(existing && existing.status === status
+      ? existing.updatedAt !== undefined ? { updatedAt: existing.updatedAt } : {}
+      : { updatedAt: now }),
   };
 
   return { ...data, progress, library: { ...data.library, [series.id]: entry } };
@@ -146,6 +182,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 
 const SERIES_TYPES = new Set(["manga", "manhwa", "manhua"]);
 const PUBLICATION_STATUSES = new Set(["ongoing", "completed", "hiatus", "cancelled", "upcoming"]);
+const isValidTime = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !isNaN(new Date(v).getTime());
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
 /** Defensive parse of a stored title snapshot; returns null if unusable. */
@@ -201,6 +238,8 @@ export function migrateUserData(raw: unknown): UserData | null {
       seriesId: typeof value.seriesId === "string" ? value.seriesId : id,
       status: status as ReadingStatus,
       addedAt: typeof value.addedAt === "string" ? value.addedAt : new Date(0).toISOString(),
+      // Optional and additive: older data has none and keeps working (addedAt is used).
+      ...(isValidTime(value.updatedAt) ? { updatedAt: value.updatedAt } : {}),
     };
   }
 
@@ -241,5 +280,34 @@ export function migrateUserData(raw: unknown): UserData | null {
     }
   }
 
-  return { version: USER_DATA_VERSION, library, progress, readerModes, savedTitles, seeded: raw.seeded === true };
+  const tombstones: Record<string, string> = {};
+  if (isRecord(raw.tombstones)) {
+    for (const [id, value] of Object.entries(raw.tombstones)) {
+      if (
+        typeof value === "string" &&
+        id.trim().length > 0 &&
+        !isNaN(new Date(value).getTime())
+      ) {
+        tombstones[id] = value;
+      }
+    }
+  }
+
+  const readerModeTimes: Record<string, string> = {};
+  if (isRecord(raw.readerModeTimes)) {
+    for (const [id, value] of Object.entries(raw.readerModeTimes)) {
+      if (id in readerModes && isValidTime(value)) readerModeTimes[id] = value;
+    }
+  }
+
+  return {
+    version: USER_DATA_VERSION,
+    library,
+    progress,
+    readerModes,
+    ...(Object.keys(readerModeTimes).length > 0 ? { readerModeTimes } : {}),
+    savedTitles,
+    tombstones,
+    seeded: raw.seeded === true,
+  };
 }

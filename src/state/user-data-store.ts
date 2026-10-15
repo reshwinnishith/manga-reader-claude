@@ -1,6 +1,7 @@
 import { emptyUserData } from "@/lib/user-data";
 import type { ReaderMode, ReadingStatus, SavedTitle, Series, UserData } from "@/domain/types";
-import { createLocalStorageAdapter, type PersistenceAdapter, type StorageRecovery } from "@/services/persistence";
+import type { PersistenceAdapter, StorageRecovery } from "@/services/persistence";
+import { createAppPersistenceAdapter } from "@/services/persistence-factory";
 import * as ops from "@/lib/user-data";
 
 export interface UserDataStore {
@@ -88,10 +89,10 @@ export function createUserDataStore({
     },
     addToLibrary: (id, status) => update((d) => ops.addToLibrary(d, id, now(), status)),
     saveExternalTitle: (title) => update((d) => ops.saveExternalTitle(d, title, now())),
-    removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
+    removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id, now())),
     replaceData: (data) => update(() => data),
-    setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),
-    setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode)),
+    setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status, now())),
+    setReaderMode: (id, mode) => update((d) => ops.setReaderMode(d, id, mode, now())),
     recordProgress: (series, chapterId, page, atEnd = false) =>
       update((d) => ops.recordProgress(d, series, chapterId, page, now(), atEnd)),
   };
@@ -101,6 +102,6 @@ let appStore: UserDataStore | undefined;
 
 /** Lazily created singleton for the running app (client only). */
 export function getAppStore(): UserDataStore {
-  appStore ??= createUserDataStore({ adapter: createLocalStorageAdapter() });
+  appStore ??= createUserDataStore({ adapter: createAppPersistenceAdapter() });
   return appStore;
 }

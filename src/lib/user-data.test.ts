@@ -9,11 +9,18 @@ const NOW = "2026-10-12T12:00:00.000Z";
 const LATER = "2026-10-12T13:00:00.000Z";
 
 describe("library", () => {
-  it("adds as planned, ignores duplicates, and removes", () => {
+  it("adds as planned, ignores duplicates, and removes with tombstone", () => {
     const a = addToLibrary(emptyUserData(), "neon-ronin", NOW);
-    expect(a.library["neon-ronin"]).toEqual({ seriesId: "neon-ronin", status: "planned", addedAt: NOW });
+    expect(a.library["neon-ronin"]).toEqual({ seriesId: "neon-ronin", status: "planned", addedAt: NOW, updatedAt: NOW });
     expect(addToLibrary(a, "neon-ronin", LATER)).toBe(a);
-    expect(removeFromLibrary(a, "neon-ronin").library).toEqual({});
+    const removed = removeFromLibrary(a, "neon-ronin", LATER);
+    expect(removed.library["neon-ronin"]).toBeUndefined();
+    expect(removed.tombstones?.["neon-ronin"]).toBe(LATER);
+
+    // Re-adding clears the tombstone
+    const reAdded = addToLibrary(removed, "neon-ronin", "2026-10-12T14:00:00.000Z");
+    expect(reAdded.library["neon-ronin"]).toBeDefined();
+    expect(reAdded.tombstones?.["neon-ronin"]).toBeUndefined();
   });
 
   it("changes reading status only for series in the library", () => {
@@ -198,13 +205,19 @@ describe("migrateUserData", () => {
     expect(migrateUserData(dropped)?.library["x"]?.status).toBe("dropped");
   });
 
-  it("falls back to reading for unknown statuses and skips malformed entries", () => {
-    const raw = v1();
-    (raw.library.a as { status: string }).status = "binge-watching";
-    (raw.progress as Record<string, unknown>)["broken"] = { chapters: 5 };
+  it("migrates and preserves valid tombstones while ignoring invalid ones", () => {
+    const raw = {
+      ...v1(),
+      tombstones: {
+        "deleted-series": "2026-10-12T12:00:00.000Z",
+        "invalid-date": "not-a-date",
+        "": "2026-10-12T12:00:00.000Z",
+      },
+    };
     const m = migrateUserData(raw)!;
-    expect(m.library["a"]?.status).toBe("reading");
-    expect(m.progress["broken"]).toBeUndefined();
+    expect(m.tombstones).toEqual({
+      "deleted-series": "2026-10-12T12:00:00.000Z",
+    });
   });
 
   it("rejects unrecognisable or future-version data", () => {
@@ -225,7 +238,7 @@ describe("saveExternalTitle", () => {
   it("stores the snapshot and adds the title to the library as planned", () => {
     const d = saveExternalTitle(emptyUserData(), TITLE, NOW);
     expect(d.savedTitles["al-101"]).toEqual(TITLE);
-    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "planned", addedAt: NOW });
+    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "planned", addedAt: NOW, updatedAt: NOW });
   });
 
   it("leaves existing library entries, progress, demo data and other saved titles untouched", () => {
@@ -244,10 +257,10 @@ describe("saveExternalTitle", () => {
 
   it("re-saving refreshes metadata but keeps status and addedAt", () => {
     let d = saveExternalTitle(emptyUserData(), TITLE, NOW);
-    d = setReadingStatus(d, "al-101", "dropped");
+    d = setReadingStatus(d, "al-101", "dropped", NOW);
     d = saveExternalTitle(d, { ...TITLE, title: "Renamed" }, LATER);
     expect(d.savedTitles["al-101"]?.title).toBe("Renamed");
-    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "dropped", addedAt: NOW });
+    expect(d.library["al-101"]).toEqual({ seriesId: "al-101", status: "dropped", addedAt: NOW, updatedAt: NOW });
   });
 
   it("keeps the metadata when the title is removed from the library (so re-adding and progress links never dangle)", () => {

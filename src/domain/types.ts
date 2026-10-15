@@ -88,8 +88,15 @@ export const defaultReaderMode = (type: SeriesType): ReaderMode =>
 export interface LibraryEntry {
   seriesId: string;
   status: ReadingStatus;
-  /** ISO timestamp */
+  /** ISO timestamp the title was (most recently) added to the library. */
   addedAt: string;
+  /**
+   * ISO timestamp of the last change to this entry (add, status edit, automatic
+   * status change from reading). Absent on data saved before sync existed; the
+   * effective change time is then `addedAt`. Sync resolves conflicts per entry
+   * with this value (see docs/sync-conflict-semantics.md).
+   */
+  updatedAt?: string;
 }
 
 /**
@@ -124,8 +131,15 @@ export interface UserData {
   library: Record<string, LibraryEntry>;
   progress: Record<string, SeriesProgress>;
   readerModes: Record<string, ReaderMode>;
+  /**
+   * When each reader mode was last chosen (seriesId -> ISO timestamp). Optional
+   * and sparse: a mode without a time loses to any timestamped choice on sync.
+   */
+  readerModeTimes?: Record<string, string>;
   /** Titles saved from search, keyed by local series id. Added in v3. */
   savedTitles: Record<string, SavedTitle>;
+  /** Tombstones for deleted library titles: seriesId -> deletedAt ISO string. */
+  tombstones?: Record<string, string>;
   /** True once the demo library has been seeded (never reseed after). */
   seeded: boolean;
 }
