@@ -69,7 +69,11 @@ describe("Firestore Security Rules for MangaReader", () => {
     }
 
     if (!emulatorAvailable) {
-      console.warn("Firestore emulator is not reachable (checked ports 8088, 8080). Transparently skipping rules tests.");
+      if (process.env.REQUIRE_FIRESTORE_EMULATOR === "true") {
+        // CI sets this so the rules can never be "tested" by being skipped.
+        throw new Error("REQUIRE_FIRESTORE_EMULATOR is set but no Firestore emulator is reachable; refusing to skip the rules tests.");
+      }
+      console.warn("Firestore emulator is not reachable (checked ports 8088, 8080). SKIPPING rules tests: run `npm run test:rules` to execute them.");
       return;
     }
     testEnv = await initializeTestEnvironment({
@@ -592,211 +596,151 @@ describe("Firestore Security Rules for MangaReader", () => {
   // -------------------------------------------------------------
   // 7. Full Sync Backup Document Validation
   // -------------------------------------------------------------
-  describe("Full Sync Document Validation", () => {
-    it("allows writing the userData sync singleton document", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
+  describe("Publication pointer (sync/userData): compare-and-swap and valid snapshots", () => {
+    const CHECKSUM = "a".repeat(64);
+    const iso = () => new Date().toISOString();
+    const snap = (id: string, revision: number, extra: Record<string, unknown> = {}) => ({
+      snapshotId: id, revision, createdAt: iso(), isComplete: true, version: 3, checksum: CHECKSUM, totalParts: 1, library: {}, ...extra,
+    });
+    const pointer = (revision: number, id: string, extra: Record<string, unknown> = {}) => ({
+      version: 3, updatedAt: iso(), revision, activeSnapshotId: id, snapshotChecksum: CHECKSUM, snapshotParts: 1, syncStatus: "ready", manifest: {}, ...extra,
+    });
+    const db = () => testEnv.authenticatedContext("userA").firestore();
+    const syncRef = () => doc(db(), "users/userA/sync/userData");
+    const snapRef = (id: string) => doc(db(), `users/userA/snapshots/${id}`);
+    const stage = (id: string, revision: number, extra: Record<string, unknown> = {}) => assertSucceeds(setDoc(snapRef(id), snap(id, revision, extra)));
+    const publish = async (id: string, revision: number) => {
+      await stage(id, revision);
+      await assertSucceeds(setDoc(syncRef(), pointer(revision, id)));
+    };
 
-      await expect(
-        assertSucceeds(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            library: {},
-            progress: {},
-            readerModes: {},
-            savedTitles: {},
-            seeded: true,
-          }),
-        ),
-      ).resolves.toBeUndefined();
+    it("allows the first publication at revision 1 and each next revision (positive control)", async () => {
+      await publish("rev_1_a", 1);
+      await publish("rev_2_a", 2);
+      await publish("rev_3_a", 3);
     });
 
-    it("denies writing to unauthorized document names under /sync", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/otherDoc");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies a first publication that does not start at revision 1", async () => {
+      await stage("rev_5_a", 5);
+      await expect(assertFails(setDoc(syncRef(), pointer(5, "rev_5_a")))).resolves.toBeDefined();
+      await stage("rev_1_a", 1);
+      await expect(assertSucceeds(setDoc(syncRef(), pointer(1, "rev_1_a")))).resolves.toBeUndefined();
     });
 
-    it("allows writing revision, syncStatus, syncSessionId, and tombstones to userData", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertSucceeds(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            revision: 10,
-            syncStatus: "ready",
-            syncSessionId: "session-uuid-12345",
-            tombstones: {
-              "series-deleted-1": new Date().toISOString(),
-            },
-            library: {},
-            progress: {},
-            readerModes: {},
-            savedTitles: {},
-            seeded: true,
-          }),
-        ),
-      ).resolves.toBeUndefined();
+    it("denies a revision that goes backwards, repeats, or skips ahead", async () => {
+      await publish("rev_1_a", 1);
+      await publish("rev_2_a", 2);
+      await stage("rev_1_b", 1);
+      await stage("rev_2_b", 2);
+      await stage("rev_4_a", 4);
+      await expect(assertFails(setDoc(syncRef(), pointer(1, "rev_1_b")))).resolves.toBeDefined(); // backwards
+      await expect(assertFails(setDoc(syncRef(), pointer(2, "rev_2_b")))).resolves.toBeDefined(); // same revision (lost the race)
+      await expect(assertFails(setDoc(syncRef(), pointer(4, "rev_4_a")))).resolves.toBeDefined(); // skipped 3
+      const current = await getDoc(syncRef());
+      expect(current.data()?.revision).toBe(2);
     });
 
-    it("allows syncStatus 'syncing' and revision 0", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertSucceeds(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            revision: 0,
-            syncStatus: "syncing",
-          }),
-        ),
-      ).resolves.toBeUndefined();
+    it("denies pointing at a snapshot that does not exist", async () => {
+      await expect(assertFails(setDoc(syncRef(), pointer(1, "rev_1_missing")))).resolves.toBeDefined();
     });
 
-    it("rejects invalid syncStatus enum value", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            syncStatus: "corrupted_status",
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies a pointer whose revision, checksum or part count disagrees with the snapshot", async () => {
+      await stage("rev_1_a", 1);
+      await expect(assertFails(setDoc(syncRef(), pointer(1, "rev_1_a", { snapshotChecksum: "b".repeat(64) })))).resolves.toBeDefined();
+      await expect(assertFails(setDoc(syncRef(), pointer(1, "rev_1_a", { snapshotParts: 2 })))).resolves.toBeDefined();
+      await stage("rev_9_a", 9); // snapshot staged for another revision
+      await expect(assertFails(setDoc(syncRef(), pointer(1, "rev_9_a")))).resolves.toBeDefined();
+      await expect(assertSucceeds(setDoc(syncRef(), pointer(1, "rev_1_a")))).resolves.toBeUndefined();
     });
 
-    it("rejects negative revision number", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            revision: -5,
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies pointers with unsafe snapshot ids", async () => {
+      await stage("rev_1_a", 1);
+      for (const bad of ["../snapshots/rev_1_a", "rev_1_a/parts/part_0", "", "x".repeat(129)]) {
+        await expect(assertFails(setDoc(syncRef(), pointer(1, bad)))).resolves.toBeDefined();
+      }
     });
 
-    it("rejects syncSessionId longer than 100 characters", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            syncSessionId: "a".repeat(101),
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies snapshots that are incomplete or have no checksum", async () => {
+      await expect(assertFails(setDoc(snapRef("rev_1_a"), snap("rev_1_a", 1, { isComplete: false })))).resolves.toBeDefined();
+      const { checksum: _omitted, ...withoutChecksum } = snap("rev_1_a", 1);
+      void _omitted;
+      await expect(assertFails(setDoc(snapRef("rev_1_a"), withoutChecksum))).resolves.toBeDefined();
+      await expect(assertSucceeds(setDoc(snapRef("rev_1_a"), snap("rev_1_a", 1)))).resolves.toBeUndefined();
     });
 
-    it("rejects tombstones field when not a map", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            tombstones: ["series-1", "series-2"], // array instead of map
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies a multi-part snapshot until its parts exist, and a pointer to one with missing parts", async () => {
+      const part = (index: number, id: string, total: number) => ({ partId: `part_${index}`, snapshotId: id, partIndex: index, totalParts: total, library: {}, checksum: CHECKSUM, createdAt: iso() });
+      const partRef = (id: string, index: number) => doc(db(), `users/userA/snapshots/${id}/parts/part_${index}`);
+      await expect(assertFails(setDoc(snapRef("rev_1_m"), snap("rev_1_m", 1, { totalParts: 2 })))).resolves.toBeDefined();
+      await assertSucceeds(setDoc(partRef("rev_1_m", 0), part(0, "rev_1_m", 2)));
+      await expect(assertFails(setDoc(snapRef("rev_1_m"), snap("rev_1_m", 1, { totalParts: 2 })))).resolves.toBeDefined(); // last part still missing
+      await assertSucceeds(setDoc(partRef("rev_1_m", 1), part(1, "rev_1_m", 2)));
+      await expect(assertSucceeds(setDoc(snapRef("rev_1_m"), snap("rev_1_m", 1, { totalParts: 2 })))).resolves.toBeUndefined();
+      await expect(assertSucceeds(setDoc(syncRef(), pointer(1, "rev_1_m", { snapshotParts: 2 })))).resolves.toBeUndefined();
     });
 
-    it("allows writing activeSnapshotId, snapshotChecksum, snapshotParts, and manifest to userData", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertSucceeds(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            activeSnapshotId: "snap-rev-10-abcd",
-            snapshotChecksum: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            snapshotParts: 3,
-            manifest: {
-              parts: 3,
-              totalBytes: 154000,
-            },
-          }),
-        ),
-      ).resolves.toBeUndefined();
+    it("denies deleting the active snapshot and its parts, but allows deleting superseded snapshots", async () => {
+      await publish("rev_1_a", 1);
+      await assertSucceeds(setDoc(doc(db(), "users/userA/snapshots/rev_2_m/parts/part_0"), { partId: "part_0", snapshotId: "rev_2_m", partIndex: 0, totalParts: 2, library: {}, checksum: CHECKSUM, createdAt: iso() }));
+      await assertSucceeds(setDoc(doc(db(), "users/userA/snapshots/rev_2_m/parts/part_1"), { partId: "part_1", snapshotId: "rev_2_m", partIndex: 1, totalParts: 2, library: {}, checksum: CHECKSUM, createdAt: iso() }));
+      await assertSucceeds(setDoc(snapRef("rev_2_m"), snap("rev_2_m", 2, { totalParts: 2 })));
+      await assertSucceeds(setDoc(syncRef(), pointer(2, "rev_2_m", { snapshotParts: 2 })));
+      await expect(assertFails(deleteDoc(snapRef("rev_2_m")))).resolves.toBeDefined();
+      await expect(assertFails(deleteDoc(doc(db(), "users/userA/snapshots/rev_2_m/parts/part_0")))).resolves.toBeDefined();
+      await expect(assertSucceeds(deleteDoc(snapRef("rev_1_a")))).resolves.toBeUndefined(); // superseded
+      expect((await getDoc(snapRef("rev_2_m"))).exists()).toBe(true);
     });
 
-    it("rejects activeSnapshotId longer than 128 characters", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            activeSnapshotId: "a".repeat(129),
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("lets a snapshot be deleted once the pointer has moved on, and the pointer itself be reset by its owner", async () => {
+      await publish("rev_1_a", 1);
+      await expect(assertFails(deleteDoc(snapRef("rev_1_a")))).resolves.toBeDefined();
+      await publish("rev_2_a", 2);
+      await expect(assertSucceeds(deleteDoc(snapRef("rev_1_a")))).resolves.toBeUndefined();
+      await expect(assertSucceeds(deleteDoc(syncRef()))).resolves.toBeUndefined();
     });
 
-    it("rejects snapshotParts less than 1", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
-
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            snapshotParts: 0,
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies writing to document names other than userData", async () => {
+      await stage("rev_1_a", 1);
+      await expect(assertFails(setDoc(doc(db(), "users/userA/sync/otherDoc"), pointer(1, "rev_1_a")))).resolves.toBeDefined();
     });
 
-    it("rejects manifest field when not a map", async () => {
-      const userA = testEnv.authenticatedContext("userA").firestore();
-      const syncRef = doc(userA, "users/userA/sync/userData");
+    it("denies invalid pointer fields one at a time (each with a passing control above)", async () => {
+      await stage("rev_1_a", 1);
+      for (const bad of [
+        pointer(1, "rev_1_a", { syncStatus: "paused" }),
+        pointer(1, "rev_1_a", { manifest: "not a map" }),
+        pointer(1, "rev_1_a", { snapshotParts: 0 }),
+        pointer(1, "rev_1_a", { version: 0 }),
+        pointer(1, "rev_1_a", { updatedAt: 5 }),
+        pointer(1, "rev_1_a", { extraField: true }),
+        pointer(1, "rev_1_a", { library: {} }), // data lives in snapshots, never inline in the pointer
+        pointer(0, "rev_1_a"),
+        pointer(-1, "rev_1_a"),
+      ]) {
+        await expect(assertFails(setDoc(syncRef(), bad))).resolves.toBeDefined();
+      }
+      await expect(assertSucceeds(setDoc(syncRef(), pointer(1, "rev_1_a")))).resolves.toBeUndefined();
+    });
 
-      await expect(
-        assertFails(
-          setDoc(syncRef, {
-            version: 3,
-            updatedAt: new Date().toISOString(),
-            manifest: "invalid-manifest-string",
-          }),
-        ),
-      ).resolves.toBeDefined();
+    it("denies a pointer missing any required field", async () => {
+      await stage("rev_1_a", 1);
+      for (const field of ["version", "updatedAt", "revision", "activeSnapshotId", "snapshotChecksum", "snapshotParts"]) {
+        const incomplete: Record<string, unknown> = pointer(1, "rev_1_a");
+        delete incomplete[field];
+        await expect(assertFails(setDoc(syncRef(), incomplete)), field).resolves.toBeDefined();
+      }
+    });
+
+    it("keeps the pointer and snapshots private to their owner", async () => {
+      await publish("rev_1_a", 1);
+      const other = testEnv.authenticatedContext("userB").firestore();
+      await expect(assertFails(getDoc(doc(other, "users/userA/sync/userData")))).resolves.toBeDefined();
+      await expect(assertFails(getDoc(doc(other, "users/userA/snapshots/rev_1_a")))).resolves.toBeDefined();
+      await expect(assertFails(deleteDoc(doc(other, "users/userA/snapshots/rev_1_x")))).resolves.toBeDefined();
+      await expect(assertFails(setDoc(doc(other, "users/userA/sync/userData"), pointer(2, "rev_1_a")))).resolves.toBeDefined();
     });
   });
 
-  // -------------------------------------------------------------
-  // 8. Staged Immutable Snapshot Architecture Validation
-  // -------------------------------------------------------------
   describe("Staged Immutable Snapshot Architecture Validation", () => {
     it("allows owner to create a valid immutable snapshot", async () => {
       const userA = testEnv.authenticatedContext("userA").firestore();

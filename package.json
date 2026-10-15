@@ -9,8 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:rules": "vitest run src/services/firestore-rules.test.ts",
-    "test:emulator": "JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH npx firebase-tools emulators:exec --only firestore 'vitest run src/services/firestore-rules.test.ts'",
+    "test:rules": "npx --yes firebase-tools@15.34.0 emulators:exec --only firestore --project demo-manga-reader \"vitest run src/services/firestore-rules.test.ts\"",
+    "test:rules:ci": "REQUIRE_FIRESTORE_EMULATOR=true npm run test:rules",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
   },

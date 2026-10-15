@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - feat/in-app-providers
+      - fix/phase1-provider-hardening
 
 jobs:
   verify:
@@ -20,3 +21,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  # The Firestore security rules are tested against a real emulator. `npm run check`
+  # skips those tests when no emulator is running, so this job runs them for real and
+  # fails (never skips) if the emulator cannot start.
+  firestore-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run test:rules:ci

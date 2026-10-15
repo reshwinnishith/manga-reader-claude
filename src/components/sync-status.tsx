@@ -1,34 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  isCloudSyncEnabled,
-  setCloudSyncEnabled,
-  syncService,
-  type SyncStatus,
-} from "@/services/firestore-sync";
-import { isFirebaseConfigured } from "@/services/firebase";
+import { isCloudSyncEnabled, setCloudSyncEnabled } from "@/services/cloud-sync-preference";
+import { isFirebaseConfigured } from "@/services/firebase-config";
+import { getSyncNotice, getSyncStatus, subscribeSyncStatus, type SyncStatus } from "@/services/sync-status-bridge";
 import { useUserData } from "@/state/use-user-data";
 import { AlertIcon, CheckIcon, CloudIcon, RefreshIcon } from "./icons";
 
 export function SyncStatusIndicator({ showButton = true }: { showButton?: boolean }) {
-  const [status, setStatus] = useState<SyncStatus>(() => syncService.getStatus());
+  const [status, setStatus] = useState<SyncStatus>(() => getSyncStatus());
   const [optedIn, setOptedIn] = useState<boolean>(() => isCloudSyncEnabled());
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const { data } = useUserData();
 
   useEffect(() => {
-    return syncService.subscribeStatus((newStatus) => {
+    return subscribeSyncStatus((newStatus) => {
       setStatus(newStatus);
       setOptedIn(isCloudSyncEnabled());
     });
   }, []);
 
+  // The Firebase SDK is only downloaded when sync is actually used.
+  const runSync = async () => {
+    const { syncService } = await import("@/services/firestore-sync");
+    await syncService.syncWithRemote(data!);
+  };
+
   const handleManualSync = async () => {
     if (!data || isManualSyncing) return;
     setIsManualSyncing(true);
     try {
-      await syncService.syncWithRemote(data);
+      await runSync();
     } finally {
       setIsManualSyncing(false);
     }
@@ -40,7 +42,7 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
     setOptedIn(true);
     setIsManualSyncing(true);
     try {
-      await syncService.syncWithRemote(data);
+      await runSync();
     } finally {
       setIsManualSyncing(false);
     }
@@ -87,7 +89,10 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
     }
   };
 
-  const { label, color, icon, title } = getStatusConfig();
+  const config = getStatusConfig();
+  const { label, color, icon } = config;
+  const notice = getSyncNotice();
+  const title = notice && (status === "error" || status === "synced") ? `${config.title}. ${notice}` : config.title;
   const canEnableCloud = isFirebaseConfigured() && !optedIn;
 
   return (
