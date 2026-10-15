@@ -67,4 +67,9 @@ describe("reader previous/next", () => {
     expect(readerNeighbors(feed, uuid(9))).toEqual({});
     expect(readerNeighbors([], uuid(1))).toEqual({});
   });
+
+  it("handles a single-chapter series with no previous and no next chapter", () => {
+    const feed = [chapter(1, "1")];
+    expect(numbers(feed, 1)).toEqual([undefined, undefined]);
+  });
 });

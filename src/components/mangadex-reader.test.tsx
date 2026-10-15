@@ -158,3 +158,74 @@ it("fails safely on a disallowed chapter URL: no pages requested and no progress
   expect(store.getSnapshot()?.progress).toEqual({});
   expect(store.getSnapshot()?.library[title.id]?.status).not.toBe("reading");
 });
+
+it("displays series title in header and indicates boundary states when on first or latest chapter", async () => {
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  expect(await screen.findByText("One-Punch Man")).toBeInTheDocument();
+  expect(screen.getByText("Chapter 1")).toBeInTheDocument();
+  expect(await screen.findByText("First chapter")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Chapter 2 →" })).toBeInTheDocument();
+});
+
+it("offers continue to next chapter upon finishing and allows retry when navigation fails", async () => {
+  const user = userEvent.setup();
+  let failNav = true;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/chapter/")) return response({ pageCount: 3, seriesId: title.id, number: "1", group: "Test team", mangaId });
+    if (url.includes("/api/sources/mangadex")) {
+      if (failNav) return response({ error: "Network error" }, 500);
+      return response({ releases: [release(id, "1"), release(second, "2")] });
+    }
+    return response({ error: "unexpected" }, 500);
+  }));
+
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  const first = await screen.findByRole("img", { name: "Page 1" });
+  fireEvent.load(first);
+
+  expect(await screen.findByText(/Chapter navigation unavailable/)).toBeInTheDocument();
+  const retryBtn = screen.getByRole("button", { name: "Retry navigation" });
+  failNav = false;
+  await user.click(retryBtn);
+
+  expect(await screen.findByRole("link", { name: "Chapter 2 →" })).toBeInTheDocument();
+
+  // Load last page and finish chapter
+  const lastImg = screen.getByRole("img", { name: "Page 3" });
+  fireEvent.load(lastImg);
+  await user.click(screen.getByRole("button", { name: "Finish chapter" }));
+
+  expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
+  expect(screen.getByRole("link", { name: "Continue to next chapter" })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${second}`));
+});
+
+it("supports tap gestures in paged mode: tapping left advances, tapping right goes back", async () => {
+  const data = initial();
+  data.readerModes[title.id] = "paged-rtl";
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  await screen.findByRole("img", { name: "Page 1" });
+  const surface = document.querySelector(".source-reader__pages--paged")!;
+
+  // Mock viewport width as 375px
+  vi.stubGlobal("innerWidth", 375);
+
+  // Tap on left side (< 35% of 375 = 131px): clientX = 50 -> advances to page 2
+  fireEvent.touchStart(surface, { touches: [{ clientX: 50, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 52, clientY: 301 }] });
+  expect(await screen.findByRole("img", { name: "Page 2" })).toBeInTheDocument();
+
+  // Tap on right side (> 65% of 375 = 243px): clientX = 300 -> goes back to page 1
+  fireEvent.touchStart(surface, { touches: [{ clientX: 300, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 298, clientY: 299 }] });
+  expect(await screen.findByRole("img", { name: "Page 1" })).toBeInTheDocument();
+});
+
+it("provides a direct back to series recovery link when chapter fails to load", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => response({ error: "Chapter offline" }, 502)));
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Chapter offline");
+  expect(screen.getByRole("button", { name: "Retry chapter" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Back to series" })).toHaveAttribute("href", `/series/${title.id}`);
+});
