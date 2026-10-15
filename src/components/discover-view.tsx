@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useUserData } from "@/state/use-user-data";
 import type { SavedTitle, SeriesType } from "@/domain/types";
-import { searchCatalog } from "@/lib/selectors";
 import { seriesFromSaved } from "@/lib/series-from-saved";
 import { ANILIST_SITE, MIN_QUERY_LENGTH, getAniListClient, type AniListClient, type CountryFilter } from "@/services/anilist";
-import { useCatalog } from "@/state/catalog-context";
 import { useTitleSearch } from "@/state/use-title-search";
 import { AddToLibraryButton, SaveTitleButton } from "./add-button";
 import { Cover } from "./cover";
@@ -29,13 +28,17 @@ const STATUS_LABEL = {
 } as const;
 
 export function DiscoverView({ client }: { client?: AniListClient }) {
-  const { series: catalog } = useCatalog();
+  const { data } = useUserData();
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState<CountryFilter>("all");
   const { view, retry, loadMore } = useTitleSearch(client ?? getAniListClient(), query, country);
 
-  const sampleType = FILTERS.find((f) => f.value === country)?.sample ?? "all";
-  const samples = useMemo(() => searchCatalog(catalog, "", sampleType), [catalog, sampleType]);
+  const saved = data?.savedTitles;
+  const library = data?.library;
+  const savedTitles = useMemo(() => Object.values(saved ?? {})
+    .filter((title) => library?.[title.id] && (country === "all" || title.type === FILTERS.find((f) => f.value === country)?.sample))
+    .sort((a, b) => (library?.[b.id]?.addedAt ?? "").localeCompare(library?.[a.id]?.addedAt ?? ""))
+    .slice(0, 12), [saved, library, country]);
 
   return (
     <>
@@ -84,28 +87,11 @@ export function DiscoverView({ client }: { client?: AniListClient }) {
               ? `Keep typing: search starts at ${MIN_QUERY_LENGTH} letters.`
               : "Type a title to search AniList."}
           </p>
-          {samples.length > 0 && (
-            <section className="section-note" aria-labelledby="samples-h">
-              <h2 id="samples-h" className="muted">Sample titles (demo, readable)</h2>
-              <ul className="discover-list">
-                {samples.map((s) => (
-                  <li key={s.id} className="dcard">
-                    <Link href={`/series/${s.id}`} className="dcard__cover" aria-label={`Open ${s.title}`}>
-                      <Cover series={s} />
-                    </Link>
-                    <div className="dcard__body">
-                      <Link href={`/series/${s.id}`} className="dcard__title">{s.title}</Link>
-                      <span className="dcard__meta">
-                        <TypeBadge type={s.type} /> {s.author} · {s.year}
-                      </span>
-                      <span className="dcard__genres">{s.genres.join(" · ")}</span>
-                      <p className="dcard__desc">{s.description}</p>
-                      <div className="dcard__actions">
-                        <AddToLibraryButton seriesId={s.id} title={s.title} compact />
-                      </div>
-                    </div>
-                  </li>
-                ))}
+          {savedTitles.length > 0 && (
+            <section className="section-note" aria-labelledby="saved-h">
+              <h2 id="saved-h">From your library</h2>
+              <ul className="discover-list" aria-label="Saved titles">
+                {savedTitles.map((title) => <ResultCard key={title.id} title={title} />)}
               </ul>
             </section>
           )}
