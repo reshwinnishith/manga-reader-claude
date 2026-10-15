@@ -87,6 +87,43 @@ describe("search request", () => {
   });
 });
 
+describe("browse request", () => {
+  it("sends one POST with variables, excludes adult titles and novels, and uses TRENDING_DESC", async () => {
+    const fetchMock = ok();
+    await clientWith(fetchMock).browse({ sort: "TRENDING_DESC" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(ANILIST_ENDPOINT);
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("omit");
+    expect(init.referrerPolicy).toBe("no-referrer");
+    const body = JSON.parse(init.body as string);
+    expect(body.variables).toEqual({ sort: ["TRENDING_DESC"], page: 1, perPage: 20 });
+    expect(body.query).toContain("isAdult: false");
+    expect(body.query).toContain("format_not: NOVEL");
+    expect(body.query).toContain("type: MANGA");
+    expect(body.query).not.toContain("$country: CountryCode");
+  });
+
+  it("passes country filter for POPULARITY_DESC", async () => {
+    const fetchMock = ok();
+    await clientWith(fetchMock).browse({ sort: "POPULARITY_DESC", country: "KR", page: 1 });
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body.variables).toEqual({ sort: ["POPULARITY_DESC"], country: "KR", page: 1, perPage: 20 });
+    expect(body.query).toContain("countryOfOrigin: $country");
+  });
+
+  it("normalises items and caches repeated calls", async () => {
+    const fetchMock = ok([FIXTURE_MEDIA]);
+    const client = clientWith(fetchMock);
+    const r1 = await client.browse({ sort: "TRENDING_DESC", country: "JP" });
+    const r2 = await client.browse({ sort: "TRENDING_DESC", country: "JP" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(r1.items[0]?.id).toBe("al-101");
+    expect(r2).toBe(r1);
+  });
+});
+
 describe("search results", () => {
   it("returns normalised items, drops bad records and duplicates, and reports paging", async () => {
     const fetchMock = ok([FIXTURE_MEDIA, { nonsense: true }, FIXTURE_MEDIA, FIXTURE_MANHWA], true);
