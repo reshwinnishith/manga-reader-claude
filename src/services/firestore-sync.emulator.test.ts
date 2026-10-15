@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Socket } from "node:net";
 import { library } from "@/test/sync-fixtures";
+import { removeFromLibrary, setReaderMode, setReadingStatus } from "@/lib/user-data";
 import {
   FirestoreSyncService,
   RemoteDataUnrecoverableError,
@@ -135,6 +136,65 @@ describe("sync client against the Firestore rules (real emulator)", () => {
     expect(remaining).not.toContain("old-1"); // and its rejection did not abort the rest of the cleanup
     expect(removed).toBeGreaterThanOrEqual(1);
   }, 30_000);
+
+  it("two devices converge on library, status, reader mode, progress and deletion through the real rules", async () => {
+    const t = (n: number) => `2026-10-02T00:00:0${n}.000Z`;
+    const deviceB = new FirestoreSyncService();
+    // Device A publishes a library; device B pulls it.
+    await service.atomicSyncOrPush(db, USER, library(3));
+    let b = await deviceB.atomicSyncOrPush(db, USER, library(0));
+    expect(Object.keys(b.library).sort()).toEqual(["al-0", "al-1", "al-2"]);
+    expect(b.progress["al-0"]!.chapters.c1!.page).toBe(3);
+    // B changes status + reader mode, finishes a chapter, and deletes a title while A edits others.
+    b = setReaderMode(setReadingStatus(b, "al-0", "completed", t(1)), "al-0", "paged-rtl", t(1));
+    b.progress["al-0"] = { ...b.progress["al-0"]!, updatedAt: t(1), chapters: { c1: { page: 19, pageCount: 20, atEnd: true, completed: true, updatedAt: t(1) } } };
+    b = removeFromLibrary(b, "al-2", t(2));
+    await deviceB.atomicSyncOrPush(db, USER, b);
+    const a = await service.atomicSyncOrPush(db, USER, setReadingStatus(library(3), "al-1", "dropped", t(3)));
+    expect(a.library["al-0"]).toMatchObject({ status: "completed" });
+    expect(a.library["al-1"]).toMatchObject({ status: "dropped" });
+    expect(a.library["al-2"]).toBeUndefined(); // the deletion propagated
+    expect(a.readerModes["al-0"]).toBe("paged-rtl");
+    expect(a.progress["al-0"]!.chapters.c1).toMatchObject({ page: 19, completed: true });
+    // Re-adding after the deletion (newer than the tombstone) survives on the other device.
+    const readded = { ...a, library: { ...a.library, "al-2": { seriesId: "al-2", status: "planned" as const, addedAt: t(5), updatedAt: t(5) } } };
+    await service.atomicSyncOrPush(db, USER, readded);
+    expect((await deviceB.atomicSyncOrPush(db, USER, b)).library["al-2"]).toMatchObject({ status: "planned" });
+  }, 60_000);
+
+  it("keeps two accounts completely separate, and one cannot read or publish into the other's data", async () => {
+    const userB = { uid: "userB", isAnonymous: true, metadata: { creationTime: "2026-01-01T00:00:00.000Z" } };
+    const dbB = env.authenticatedContext("userB").firestore() as unknown as Firestore;
+    await service.atomicSyncOrPush(db, USER, library(3, 0));
+    await new FirestoreSyncService().atomicSyncOrPush(dbB, userB, library(2, 100));
+    const a = await loadRemoteState(db, USER);
+    const b = await loadRemoteState(dbB, userB);
+    expect(Object.keys(a.data!.library).sort()).toEqual(["al-0", "al-1", "al-2"]);
+    expect(Object.keys(b.data!.library).sort()).toEqual(["al-100", "al-101"]);
+    await expect(assertFails(getDoc(doc(dbB, "users/userA/sync/userData")))).resolves.toBeDefined();
+    const activeA = (await getDoc(doc(db, "users/userA/sync/userData"))).data()!.activeSnapshotId as string;
+    await expect(assertFails(getDoc(doc(dbB, `users/userA/snapshots/${activeA}`)))).resolves.toBeDefined();
+    await expect(assertFails(deleteDoc(doc(dbB, `users/userA/snapshots/old`)))).resolves.toBeDefined();
+    // An attempt by B to sync into A's account is refused and changes nothing.
+    await expect(new FirestoreSyncService().atomicSyncOrPush(dbB, USER, library(1, 500))).rejects.toBeDefined();
+    expect(Object.keys((await loadRemoteState(db, USER)).data!.library)).toHaveLength(3);
+  }, 60_000);
+
+  it("offline edits made on one device are merged, not lost, when it reconnects after another device published", async () => {
+    const t = (n: number) => `2026-10-03T00:00:0${n}.000Z`;
+    const phone = new FirestoreSyncService();
+    await phone.atomicSyncOrPush(db, USER, library(2)); // phone synced, then goes offline
+    // While the phone is offline another device adds a title and moves the revision on twice.
+    await service.atomicSyncOrPush(db, USER, library(3));
+    await service.atomicSyncOrPush(db, USER, library(4));
+    // The phone's offline edits (status + a new title) made against its older copy.
+    const offline = setReadingStatus(library(2), "al-0", "completed", t(1));
+    offline.library["al-50"] = { seriesId: "al-50", status: "reading", addedAt: t(2), updatedAt: t(2) };
+    const merged = await phone.atomicSyncOrPush(db, USER, offline);
+    expect(Object.keys(merged.library).sort()).toEqual(["al-0", "al-1", "al-2", "al-3", "al-50"]);
+    expect(merged.library["al-0"]).toMatchObject({ status: "completed" });
+    expect((await loadRemoteState(db, USER)).revision).toBe(4);
+  }, 60_000);
 
   it("two devices publishing at once both land under real transaction semantics", async () => {
     const other = new FirestoreSyncService();
