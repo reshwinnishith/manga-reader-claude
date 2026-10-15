@@ -65,6 +65,20 @@ try {
     assert.match(status, /Offline|error/i, `a blocked network must not report "synced": ${status}`);
     const backup = await page.evaluate(() => localStorage.getItem("manga-reader:v1:pre-sync-backup"));
     console.log(`PASS configured: SDK lazy (${sdkChunks.length} chunk), status="${status}", library+progress intact, pre-sync backup ${backup ? "present" : "not created (sync never reached the cloud)"}, blocked hosts: ${[...new Set(blocked)].join(", ")}`);
+    // Reload behaviour and opt-out: Google sign-in is offered while opted in; Disable stops everything,
+    // keeps local data, and a reload afterwards loads no SDK.
+    await page.getByRole("button", { name: "Sign in with Google" }).waitFor({ timeout: 5000 });
+    await page.getByRole("button", { name: "Disable cloud sync" }).click();
+    assert.equal(await page.evaluate(() => localStorage.getItem("manga-reader:v1:cloud-sync-enabled")), "false");
+    assert.equal(await page.getByRole("button", { name: "Sign in with Google" }).count(), 0, "Google sign-in must disappear when sync is off");
+    const blockedBeforeReload = blocked.length;
+    sdkChunks.length = 0;
+    await page.reload({ waitUntil: "networkidle" });
+    assert.equal(sdkChunks.length, 0, "SDK loaded after reload with sync disabled");
+    assert.equal(blocked.length, blockedBeforeReload, "network activity after reload with sync disabled");
+    assert.deepEqual(JSON.parse(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).library, JSON.parse(before).library);
+    assert.ok(await page.getByRole("button", { name: "Enable Cloud Sync" }).isVisible(), "opt-in must be offered again");
+    console.log("PASS opt-out: Google sign-in + Disable shown while opted in; after Disable and reload: no SDK, no network, library intact");
     for (const host of blocked) assert.ok(/googleapis\.com$|firebaseapp\.com$|firebaseio\.com$/.test(host), `unexpected external host ${host}`);
   }
 } finally {

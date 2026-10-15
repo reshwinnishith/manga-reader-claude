@@ -180,6 +180,18 @@ describe("sync client against the Firestore rules (real emulator)", () => {
     expect(Object.keys((await loadRemoteState(db, USER)).data!.library)).toHaveLength(3);
   }, 60_000);
 
+  it("signing in to a Google account that already has cloud data merges this device's library into it under the real rules and leaves the anonymous copy untouched", async () => {
+    const google = { uid: "userG", isAnonymous: false, metadata: { creationTime: "2025-01-01T00:00:00.000Z" } };
+    const dbG = env.authenticatedContext("userG").firestore() as unknown as Firestore;
+    await service.atomicSyncOrPush(db, USER, library(2, 0)); // this device, anonymous account
+    const anonymousBefore = canonicalStringify(await snapshotIds());
+    await new FirestoreSyncService().atomicSyncOrPush(dbG, google, library(3, 100)); // the Google account, set up on another device
+    const merged = await service.atomicSyncOrPush(dbG, google, library(2, 0)); // this device after switching accounts
+    expect(Object.keys(merged.library).sort()).toEqual(["al-0", "al-1", "al-100", "al-101", "al-102"]);
+    expect(canonicalStringify(await snapshotIds())).toBe(anonymousBefore);
+    expect((await loadRemoteState(dbG, google)).revision).toBe(2);
+  }, 60_000);
+
   it("offline edits made on one device are merged, not lost, when it reconnects after another device published", async () => {
     const t = (n: number) => `2026-10-03T00:00:0${n}.000Z`;
     const phone = new FirestoreSyncService();

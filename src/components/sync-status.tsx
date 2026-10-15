@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isCloudSyncEnabled, setCloudSyncEnabled } from "@/services/cloud-sync-preference";
 import { isFirebaseConfigured } from "@/services/firebase-config";
-import { getSyncNotice, getSyncStatus, subscribeSyncStatus, type SyncStatus } from "@/services/sync-status-bridge";
+import { getSyncNotice, getSyncStatus, publishSyncState, subscribeSyncStatus, type SyncStatus } from "@/services/sync-status-bridge";
 import { useUserData } from "@/state/use-user-data";
 import { AlertIcon, CheckIcon, CloudIcon, RefreshIcon } from "./icons";
 
@@ -12,6 +12,29 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
   const [optedIn, setOptedIn] = useState<boolean>(() => isCloudSyncEnabled());
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const { data } = useUserData();
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+  const [googleLinked, setGoogleLinked] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+
+  // Only while opted in: the SDK is already needed then, so watching the account costs nothing extra.
+  useEffect(() => {
+    if (!optedIn || !isFirebaseConfigured()) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void import("@/services/google-account")
+      .then(({ watchGoogleLinked }) => {
+        if (!cancelled) unsubscribe = watchGoogleLinked(setGoogleLinked);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [optedIn]);
 
   useEffect(() => {
     return subscribeSyncStatus((newStatus) => {
@@ -46,6 +69,30 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
     } finally {
       setIsManualSyncing(false);
     }
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (!dataRef.current || signingIn) return;
+    setSigningIn(true);
+    setAccountMessage(null);
+    try {
+      const { connectGoogleAccount } = await import("@/services/google-account");
+      const result = await connectGoogleAccount(() => dataRef.current!);
+      setAccountMessage(result.message);
+    } catch {
+      setAccountMessage("Google sign-in could not start. Your library is unchanged.");
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  /** Stops listeners and every later cloud operation. Local data and the cloud copy are left as they are. */
+  const handleDisableSync = () => {
+    setCloudSyncEnabled(false);
+    setOptedIn(false);
+    setGoogleLinked(false);
+    setAccountMessage("Cloud sync is off. Your library on this device and your cloud copy were kept.");
+    publishSyncState({ notice: undefined });
   };
 
   const getStatusConfig = () => {
@@ -100,6 +147,7 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
       className="sync-status"
       style={{
         display: "inline-flex",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: "6px",
         fontSize: "0.8125rem",
@@ -160,6 +208,37 @@ export function SyncStatusIndicator({ showButton = true }: { showButton?: boolea
             ? "Retry sync"
             : "Sync now"}
         </button>
+      )}
+
+      {showButton && optedIn && isFirebaseConfigured() && !googleLinked && (
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          disabled={signingIn}
+          className="btn btn--secondary btn--compact"
+          style={{ padding: "2px 8px", fontSize: "0.75rem", marginLeft: "4px", minHeight: "26px" }}
+          aria-label="Sign in with Google"
+        >
+          {signingIn ? "Signing in..." : "Sign in with Google"}
+        </button>
+      )}
+
+      {showButton && optedIn && isFirebaseConfigured() && (
+        <button
+          type="button"
+          onClick={handleDisableSync}
+          className="btn btn--secondary btn--compact"
+          style={{ padding: "2px 8px", fontSize: "0.75rem", marginLeft: "4px", minHeight: "26px" }}
+          aria-label="Disable cloud sync"
+        >
+          Disable cloud sync
+        </button>
+      )}
+
+      {accountMessage && (
+        <span role="alert" style={{ flexBasis: "100%", fontSize: "0.75rem" }}>
+          {accountMessage}
+        </span>
       )}
     </div>
   );

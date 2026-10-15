@@ -348,3 +348,53 @@ it("a recovery failure is a typed error, not a silent fallback to empty", async 
   fake.remove(`users/u1/snapshots/${fake.docs.get(POINTER)!.data.activeSnapshotId as string}`);
   await expect(service.fetchRemoteData(DB, TEST_USER)).rejects.toBeInstanceOf(RemoteDataUnrecoverableError);
 });
+
+describe("disabling cloud sync and switching accounts", () => {
+  it("turning sync off in the middle of a run publishes nothing and removes the staged copy", async () => {
+    fake.interceptors.push((op, path) => {
+      if (op === "set" && path.includes("/snapshots/")) setCloudSyncEnabled(false); // user clicks Disable while the snapshot is being staged
+    });
+    const local = library(3);
+    const outcome = await service.syncNow(() => local);
+    expect(outcome).toMatchObject({ ok: false, reason: "disabled" });
+    expect(service.getStatus()).toBe("disabled");
+    expect(fake.docs.has(POINTER)).toBe(false);
+    expect(fake.paths("users/u1/snapshots/")).toEqual([]);
+    expect(outcome.data).toBe(local); // local data untouched
+  });
+
+  it("disabling stops all later cloud operations but deletes neither the cloud copy nor local data", async () => {
+    await service.syncNow(() => library(2));
+    const cloudBefore = canonicalStringify([...fake.docs.entries()]);
+    setCloudSyncEnabled(false);
+    const counters = { ...fake.counters };
+    expect(await service.syncNow(() => library(5))).toMatchObject({ ok: false, reason: "disabled" });
+    expect(fake.counters).toEqual(counters);
+    expect(canonicalStringify([...fake.docs.entries()])).toBe(cloudBefore);
+  });
+
+  it("a switch to another account resets revision tracking so that account's changes are still delivered", async () => {
+    // Account u1 is at a high revision; the Google account g1 is at revision 1.
+    for (let i = 0; i < 4; i++) await service.atomicSyncOrPush(DB, TEST_USER, library(2 + i));
+    const google = { uid: "g1", isAnonymous: false, metadata: { creationTime: "2025-01-01T00:00:00.000Z" } };
+    await new FirestoreSyncService().atomicSyncOrPush(DB, google, library(2, 100)); // g1 revision 1
+    const onRemote = vi.fn();
+    const dispose = service.listenToRemote(onRemote);
+    await tick(10);
+    auth.setUser(google); // the user signs in to g1 on this tab
+    await tick(10);
+    onRemote.mockClear();
+    await new FirestoreSyncService().atomicSyncOrPush(DB, google, library(1, 200)); // another device -> g1 revision 2 (< u1's 4)
+    await tick(20);
+    expect(onRemote).toHaveBeenCalledTimes(1);
+    expect(Object.keys((onRemote.mock.calls[0]![0] as UserData).library)).toContain("al-200");
+    dispose();
+  });
+
+  it("whenIdle waits for queued syncs", async () => {
+    let finished = false;
+    void service.syncNow(() => library(2)).then(() => { finished = true; });
+    await service.whenIdle();
+    expect(finished).toBe(true);
+  });
+});

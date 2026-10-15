@@ -68,10 +68,18 @@ writes, and never applies unverified data.
   fallback where `crypto.subtle` is unavailable. Sync data written by earlier
   commits of this unmerged branch is not readable (no live data exists).
 
-## Google sign-in with safe account linking (designed, not activated)
+## Google sign-in with safe account linking (wired, inert until sync is enabled)
 
-`signInWithGoogleSafely` (`firebase-auth.ts`) is not wired to any button and needs
-the Google provider enabled in the Firebase project first (owner action):
+`signInWithGoogleSafely` (`firebase-auth.ts`) is reached only through the
+**Sign in with Google** button, which appears only when Firebase is configured and
+the user has opted in (`google-account.ts`, lazy). It needs the Google provider
+enabled in the Firebase project (owner action). Before the account changes, a
+backup is written and read back (`manga-reader:v1:pre-account-switch-backup`); if
+that fails nothing is signed in. Queued syncs finish first. Revision tracking is
+per account, so switching accounts cannot hide the new account's changes.
+**Disable cloud sync** turns the opt-in off: the listener detaches, runs in progress
+stop before their next cloud write (a staged snapshot is removed), and nothing is
+deleted locally or remotely; the Firebase sign-in itself is kept.
 
 - Anonymous user: `linkWithPopup`. The user ID is unchanged, so existing cloud
   data is kept and becomes reachable from other devices that sign in with the
@@ -82,8 +90,8 @@ the Google provider enabled in the Firebase project first (owner action):
   cloud copy stays in place.
 - Popup closed/blocked/provider disabled/network errors change nothing.
 
-To activate: enable Google sign-in and add the site domain under authorized
-domains; add a button calling `signInWithGoogleSafely`; consider an admin task
+To use: enable Google sign-in and add the site domain under authorized
+domains; consider an admin task
 that deletes anonymous users inactive for 30+ days (their data is merged into the
 account or still on the device).
 

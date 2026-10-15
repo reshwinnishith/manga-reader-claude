@@ -31,14 +31,11 @@ networking/persistence, cross-device identity, deployed-rules behaviour, quota/b
 
 ## Known blockers before a live run
 
-1. **No Google sign-in UI.** `signInWithGoogleSafely` is implemented and unit-tested but no
-   screen calls it, so live steps 4-5 cannot be done from the app. Needs a small, approved
-   UI change (a "Sign in with Google" action shown only for opted-in users).
+1. ~~No Google sign-in UI.~~ Resolved: an opted-in user sees **Sign in with Google** (hidden once Google is linked) and **Disable cloud sync**. Sign-in first writes a verified backup (`manga-reader:v1:pre-account-switch-backup`), waits for running syncs, uses `signInWithGoogleSafely`, then syncs/merges. Cancelled popups change nothing.
 2. **No App Check client code.** The app never initialises App Check. If App Check is
    *enforced* for Auth/Firestore in the Console, every request from this app is rejected.
    Use **unenforced (monitor) mode** for the first smoke test, or add the client first.
-3. **No disable/opt-out button.** The only opt-out is clearing
-   `manga-reader:v1:cloud-sync-enabled` (see procedure).
+3. ~~No opt-out button.~~ Resolved: **Disable cloud sync** stops the listener and all later cloud operations (also mid-run), keeps local data and the cloud copy, and survives reload. It does not sign the user out of Firebase.
 4. **No `.firebaserc`/deploy target** in the repo (intentional). Rules deployment is manual.
 
 ## Live procedure (owner, disposable test project)
@@ -59,7 +56,7 @@ build commit SHA and time for every run.
    subcollections (replicas are off).
 3. **Local preservation.** Compare `manga-reader:v1` before/after: library and progress
    identical. Reload: still identical, still synced, no duplicate snapshots.
-4. **Google linking** (after blocker 1): in A, link a Google test account. Expect the
+4. **Google linking:** in A, click **Sign in with Google** and link a Google test account. Expect the
    **same uid** (Auth > Users: the anonymous row gains a Google provider), data unchanged.
    Profile B (fresh): opt in, sign in with the same Google account -> B receives A's titles
    and progress; B's own pre-existing titles merge in, none lost.
@@ -77,7 +74,8 @@ build commit SHA and time for every run.
    (b) Corrupt *all* snapshots: sync reports an error, **writes nothing**, local data intact.
    (c) Account isolation: with a second Google test account C, confirm C never sees A's
    data and, in the Rules Playground, that C cannot read `users/{A}/...`.
-   (d) Opt out: remove the localStorage key and reload: no Firebase traffic.
+   (d) Opt out: click **Disable cloud sync**, reload: no Firebase traffic, library intact; the cloud copy is still there. Re-enable and confirm it merges.
+   (e) Cancel the Google popup: message "Sign-in cancelled. Nothing changed."; block pop-ups: the blocked-popup message appears.
 
 Pass criteria: no step loses or duplicates local data; no step needs a rules or data
 change made by hand other than the deliberate corruption in 8; Firestore usage stays

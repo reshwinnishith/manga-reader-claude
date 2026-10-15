@@ -106,6 +106,14 @@ export type SyncOutcome =
 
 type MergedListener = (merged: UserData) => void;
 
+/** Thrown inside a run when the user disables cloud sync while it is in progress. */
+export class SyncDisabledError extends Error {
+  constructor() {
+    super("Cloud sync was turned off.");
+    this.name = "SyncDisabledError";
+  }
+}
+
 class FirestoreSyncService {
   private status: SyncStatus = isFirebaseConfigured() && isCloudSyncEnabled() ? "idle" : "disabled";
   private listeners = new Set<(status: SyncStatus) => void>();
@@ -114,6 +122,8 @@ class FirestoreSyncService {
   private currentReconciliationId = 0;
   /** Highest revision this tab has published or read; used to ignore its own echoes. */
   private lastKnownRevision = 0;
+  /** The account `lastKnownRevision` belongs to; revisions are per account, so a switch resets it. */
+  private revisionUid: string | null = null;
   private lastNotice: string | undefined;
   private lastRecoveredFrom: { snapshotId: string; reason: string } | undefined;
   // Single-flight queue: one sync runs at a time; requests made meanwhile coalesce into one follow-up.
@@ -129,6 +139,21 @@ class FirestoreSyncService {
       window.addEventListener("offline", () => this.handleNetworkChange(false));
       if (!navigator.onLine && isFirebaseConfigured() && isCloudSyncEnabled()) this.setStatus("offline");
     }
+  }
+
+  private trackAccount(uid: string) {
+    if (this.revisionUid === uid) return;
+    this.revisionUid = uid;
+    this.lastKnownRevision = 0;
+  }
+
+  /** Settles once the sync queue is empty (used before switching accounts). */
+  public async whenIdle(): Promise<void> {
+    let tail: Promise<unknown>;
+    do {
+      tail = this.tail;
+      await tail;
+    } while (tail !== this.tail);
   }
 
   public getStatus(): SyncStatus {
@@ -264,11 +289,16 @@ class FirestoreSyncService {
     user: { uid: string; isAnonymous?: boolean; metadata?: { creationTime?: string } },
     localData: UserData,
     maxRetries = 3,
+    /** Checked before each cloud write; the sync run passes "is cloud sync still on?". */
+    mayContinue: () => boolean = () => true,
   ): Promise<UserData> {
     const userDocRef = doc(db, "users", user.uid);
     const syncDocRef = doc(db, "users", user.uid, "sync", "userData");
 
+    this.trackAccount(user.uid);
     for (let attempt = 0; ; attempt++) {
+      // Turning cloud sync off stops any further cloud operation, even in the middle of a run.
+      if (!mayContinue()) throw new SyncDisabledError();
       const now = new Date().toISOString();
       const createdAt = user.metadata?.creationTime ? new Date(user.metadata.creationTime).toISOString() : now;
       const remote = await this.fetchRemoteData(db, user); // throws RemoteDataUnrecoverableError: nothing is published
@@ -279,6 +309,7 @@ class FirestoreSyncService {
 
       const snapshot = await stageAndVerifySnapshot(db, user, expectedRevision + 1, merged);
       try {
+        if (!mayContinue()) throw new SyncDisabledError(); // staged copy is removed below; nothing is published
         const publication = runTransaction(db, async (tx) => {
           const current = await tx.get(syncDocRef);
           const serverRevision = current.exists() ? ((current.data()?.revision as number) ?? 0) : 0;
@@ -388,7 +419,7 @@ class FirestoreSyncService {
       if (!db) throw new Error("Firestore is not available");
 
       this.lastRecoveredFrom = undefined;
-      const merged = await this.atomicSyncOrPush(db, user, local);
+      const merged = await this.atomicSyncOrPush(db, user, local, 3, isCloudSyncEnabled);
       const recoveredFrom = this.takeRecovery();
       this.setNotice(
         recoveredFrom
@@ -400,6 +431,10 @@ class FirestoreSyncService {
       return { ok: true, data: merged, recoveredFrom };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      if (error instanceof SyncDisabledError || !isCloudSyncEnabled()) {
+        this.setStatus("disabled");
+        return { ok: false, reason: "disabled", data: local };
+      }
       console.warn("Firestore sync failed:", error);
       this.setNotice(error instanceof RemoteDataUnrecoverableError ? error.message : undefined);
       const offline = !navigator.onLine;
@@ -432,6 +467,7 @@ class FirestoreSyncService {
       const db = getFirebaseFirestore();
       if (disposed || !db || !currentUser || !isFirebaseConfigured() || !isCloudSyncEnabled()) return;
       const user = currentUser;
+      this.trackAccount(user.uid);
       detach = onSnapshot(
         doc(db, "users", user.uid, "sync", "userData"),
         (snapshot) => {
@@ -442,6 +478,7 @@ class FirestoreSyncService {
             try {
               await this.publishing; // our own publication, if any, finishes (and is recorded) first
               if (revision <= this.lastKnownRevision) return; // echo of this tab's own write
+              if (!isCloudSyncEnabled()) return;
               const remote = await this.fetchRemoteData(db, user);
               this.lastKnownRevision = Math.max(this.lastKnownRevision, remote.revision);
               if (remote.data) onRemoteChange(remote.data);
