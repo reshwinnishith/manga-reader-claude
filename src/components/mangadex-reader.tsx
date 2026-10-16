@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AppStatus } from "./app-status";
 import { PersistenceNotice } from "./persistence-notice";
 import { useEffect, useRef, useState } from "react";
 import { useUserData } from "@/state/use-user-data";
@@ -13,6 +14,22 @@ type ChapterInfo = { pageCount: number; seriesId: string; number: string; group:
 function PageImage({ id, index, eager, onReady }: { id: string; index: number; eager: boolean; onReady(index: number): void }) {
   const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
   const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (state !== "error") return;
+    const retry = () => {
+      if (!navigator.onLine || document.visibilityState === "hidden") return;
+      setState("loading");
+      setAttempt((n) => n + 1);
+    };
+    window.addEventListener("online", retry);
+    document.addEventListener("visibilitychange", retry);
+    return () => {
+      window.removeEventListener("online", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [state]);
+
   return <div className={`source-page source-page--${state}`} data-page={index}>
     {state === "loading" && <span className="source-page__status" role="status">Loading page {index + 1}…</span>}
     {state === "error" && <div className="source-page__status" role="alert">Page {index + 1} unavailable. <button className="btn btn--secondary" onClick={() => { setState("loading"); setAttempt((n) => n + 1); }}>Retry page {index + 1}</button></div>}
@@ -55,6 +72,7 @@ function ChapterReader({ id, requestedSeriesId }: { id: string; requestedSeriesI
   }, [id, requestedSeriesId, attempt]);
 
   return <main className="source-reader">
+    <AppStatus />
     <PersistenceNotice />
     <header className="source-reader__header">
       <Link href={requestedSeriesId ? `/series/${requestedSeriesId}` : "/library"} className="source-reader__back" aria-label={savedTitle ? `Back to ${savedTitle}` : "Back to series"}>

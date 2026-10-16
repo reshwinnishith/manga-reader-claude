@@ -1,4 +1,5 @@
 import type { PublicationStatus, SavedTitle, SeriesType } from "@/domain/types";
+import { publisherLink } from "./official-links";
 import { cleanDescription } from "@/lib/clean-description";
 
 /**
@@ -90,6 +91,7 @@ const BROWSE_QUERY = /* GraphQL */ `
         }
         countryOfOrigin
         siteUrl
+        externalLinks { site url language }
         staff(perPage: 10, sort: RELEVANCE) {
           edges {
             role
@@ -146,6 +148,7 @@ const SEARCH_QUERY = /* GraphQL */ `
         }
         countryOfOrigin
         siteUrl
+        externalLinks { site url language }
         staff(perPage: 10, sort: RELEVANCE) {
           edges {
             role
@@ -251,6 +254,7 @@ interface RawMedia {
   startDate?: { year?: number | null } | null;
   countryOfOrigin?: string | null;
   siteUrl?: string | null;
+  externalLinks?: { site?: string; url?: string; language?: string }[] | null;
   staff?: { edges?: { role?: string | null; node?: { name?: { full?: string | null } | null } | null }[] | null } | null;
 }
 
@@ -277,6 +281,8 @@ export function normalizeMedia(raw: unknown, fetchedAt: string): SavedTitle | nu
     source: "anilist",
     externalId: id,
     malId: typeof m.idMal === "number" && Number.isSafeInteger(m.idMal) && m.idMal > 0 ? m.idMal : undefined,
+    externalIds: { anilist: String(id), ...(typeof m.idMal === "number" ? { mal: String(m.idMal) } : {}) },
+    officialLinks: (m.externalLinks || []).map((link) => publisherLink(link.url, link.language)).filter((l): l is NonNullable<typeof l> => !!l),
     title,
     type: typeFromCountry(m.countryOfOrigin),
     description: cleanDescription(m.description),

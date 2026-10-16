@@ -128,6 +128,21 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
         </div>
       )}
 
+      {savedTitle?.alternateTitles?.length ? (
+        <details className="section">
+          <summary>Alternate titles</summary>
+          <ul>
+            {savedTitle.alternateTitles
+              .filter((t) => t !== series.title)
+              .map((t) => (
+                <li key={t} lang={/[ぁ-龯]/.test(t) ? "ja" : undefined}>
+                  {t}
+                </li>
+              ))}
+          </ul>
+        </details>
+      ) : null}
+
       <section className="section">
         <p className={`desc ${expanded ? "" : "desc--clamped"}`}>{series.description}</p>
         {series.description !== "No description available." && <button type="button" className="link" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AppStatus } from "@/components/app-status";
 import { PersistenceNotice } from "@/components/persistence-notice";
 import { AppNav } from "@/components/app-nav";
 
@@ -9,6 +10,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <a href="#main" className="skip-link">Skip to content</a>
       <AppNav />
       <main id="main" className="shell__main">
+        <AppStatus />
         <PersistenceNotice />
         {children}
       </main>

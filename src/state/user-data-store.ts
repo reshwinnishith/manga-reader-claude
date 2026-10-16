@@ -13,6 +13,7 @@ export interface UserDataStore {
   addToLibrary(seriesId: string, status?: ReadingStatus): void;
   /** Save a search result (metadata snapshot) and add it to the library. */
   saveExternalTitle(title: SavedTitle): void;
+  recordOpened(title: SavedTitle): void;
   removeFromLibrary(seriesId: string): void;
   replaceData(data: UserData): void;
   setReadingStatus(seriesId: string, status: ReadingStatus): void;
@@ -88,6 +89,18 @@ export function createUserDataStore({
     },
     addToLibrary: (id, status) => update((d) => ops.addToLibrary(d, id, now(), status)),
     saveExternalTitle: (title) => update((d) => ops.saveExternalTitle(d, title, now())),
+    recordOpened: (title) =>
+      update((d) =>
+        d.recentlyOpened?.[0]?.title.id === title.id
+          ? d
+          : {
+              ...d,
+              recentlyOpened: [
+                { title, openedAt: now() },
+                ...(d.recentlyOpened || []).filter((r) => r.title.id !== title.id),
+              ].slice(0, 12),
+            },
+      ),
     removeFromLibrary: (id) => update((d) => ops.removeFromLibrary(d, id)),
     replaceData: (data) => update(() => data),
     setReadingStatus: (id, status) => update((d) => ops.setReadingStatus(d, id, status)),

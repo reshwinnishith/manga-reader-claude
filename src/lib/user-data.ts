@@ -1,3 +1,4 @@
+import { publisherLink } from "@/services/official-links";
 import {
   INACTIVE_STATUSES,
   READING_STATUSES,
@@ -151,13 +152,33 @@ const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every
 /** Defensive parse of a stored title snapshot; returns null if unusable. */
 function parseSavedTitle(id: string, value: unknown): SavedTitle | null {
   if (!isRecord(value)) return null;
-  if (typeof value.title !== "string" || typeof value.externalId !== "number" || value.source !== "anilist") return null;
+  if (
+    typeof value.title !== "string" ||
+    (typeof value.externalId !== "number" && typeof value.externalId !== "string") ||
+    typeof value.source !== "string" ||
+    !["anilist", "mangadex", "kitsu", "mangaupdates"].includes(value.source)
+  )
+    return null;
   if (typeof value.url !== "string" || !/^https:\/\//.test(value.url)) return null;
   return {
     id,
-    source: "anilist",
+    source: value.source as SavedTitle["source"],
     externalId: value.externalId,
     malId: typeof value.malId === "number" && Number.isSafeInteger(value.malId) && value.malId > 0 ? value.malId : undefined,
+    externalIds: isRecord(value.externalIds)
+      ? Object.fromEntries(
+          Object.entries(value.externalIds).filter(
+            ([k, v]) => ["anilist", "mangadex", "kitsu", "mal", "mangaupdates"].includes(k) && typeof v === "string",
+          ),
+        )
+      : undefined,
+    availableLanguages: isStringArray(value.availableLanguages) ? value.availableLanguages : undefined,
+    officialLinks: Array.isArray(value.officialLinks)
+      ? value.officialLinks.flatMap((link) => {
+          const r = isRecord(link) ? publisherLink(link.url, link.language) : null;
+          return r ? [r] : [];
+        })
+      : undefined,
     title: value.title,
     type: typeof value.type === "string" && SERIES_TYPES.has(value.type) ? (value.type as SavedTitle["type"]) : "manga",
     description: typeof value.description === "string" ? value.description : "",
@@ -241,5 +262,24 @@ export function migrateUserData(raw: unknown): UserData | null {
     }
   }
 
-  return { version: USER_DATA_VERSION, library, progress, readerModes, savedTitles, seeded: raw.seeded === true };
+  const recentlyOpened = Array.isArray(raw.recentlyOpened)
+    ? raw.recentlyOpened
+        .flatMap((row) => {
+          if (!isRecord(row) || !isRecord(row.title) || typeof row.title.id !== "string" || typeof row.openedAt !== "string")
+            return [];
+          const title = parseSavedTitle(row.title.id, row.title);
+          return title ? [{ title, openedAt: row.openedAt }] : [];
+        })
+        .slice(0, 12)
+    : undefined;
+
+  return {
+    version: USER_DATA_VERSION,
+    library,
+    progress,
+    readerModes,
+    savedTitles,
+    seeded: raw.seeded === true,
+    ...(recentlyOpened ? { recentlyOpened } : {}),
+  };
 }

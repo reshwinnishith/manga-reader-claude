@@ -43,7 +43,7 @@ export interface Series {
   hue: number;
   chapters: Chapter[];
   /** Where the metadata came from. Absent = bundled demo catalog. */
-  source?: "anilist";
+  source?: CatalogProviderId;
   /** Remote cover image (title-search results). Falls back to generated art. */
   coverUrl?: string;
   /** Public page for the title at its source. */
@@ -57,13 +57,19 @@ export interface Series {
  * it. Deliberately small: only what is needed to show the title in the library.
  * It is plain data, so it can sync later alongside the rest of `UserData`.
  */
+export type CatalogProviderId = "anilist" | "mangadex" | "kitsu" | "mangaupdates";
+export interface ExternalIds { anilist?: string; mangadex?: string; kitsu?: string; mal?: string; mangaupdates?: string }
+
 export interface SavedTitle {
   /** Local series id, e.g. "al-30002" (source prefix + external id). */
   id: string;
-  source: "anilist";
-  externalId: number;
+  source: CatalogProviderId;
+  externalId: number | string;
   /** MyAnimeList ID reported by AniList; a second exact identity for sources. */
   malId?: number;
+  externalIds?: ExternalIds;
+  availableLanguages?: string[];
+  officialLinks?: { providerId: string; url: string; label: string; language: string }[];
   title: string;
   type: SeriesType;
   description: string;
@@ -128,4 +134,6 @@ export interface UserData {
   savedTitles: Record<string, SavedTitle>;
   /** True once the demo library has been seeded (never reseed after). */
   seeded: boolean;
+  /** Metadata snapshots only; opening never adds to the library. */
+  recentlyOpened?: { title: SavedTitle; openedAt: string }[];
 }

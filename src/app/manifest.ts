@@ -2,6 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    id: "/",
     name: "Manga Reader",
     short_name: "Manga",
     description: "A simple, beautiful manga and manhwa reader.",
