@@ -18,9 +18,13 @@ const moon = normalizeMedia(FIXTURE_MEDIA, NOW)!;
 const tap = normalizeMedia(FIXTURE_MANHWA, NOW)!;
 const result = (items = [moon, tap], hasNextPage = false, page = 1): SearchResult => ({ items, hasNextPage, page });
 
-function fakeClient(impl: AniListClient["search"] = async () => result()) {
-  const search = vi.fn(impl);
-  return { client: { search } as AniListClient, search };
+function fakeClient(
+  searchImpl: AniListClient["search"] = async () => result(),
+  browseImpl: AniListClient["browse"] = async () => result(),
+) {
+  const search = vi.fn(searchImpl);
+  const browse = vi.fn(browseImpl);
+  return { client: { search, browse } as AniListClient, search, browse };
 }
 
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [], total: 0 }), { headers: { "content-type": "application/json" } }))); });
@@ -32,14 +36,110 @@ const type = async (text: string) => {
 };
 const user = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
-describe("Discover · search flow", () => {
-  it("starts idle: sample titles, a hint, and no API call", () => {
-    const { client, search } = fakeClient();
+describe("Discover · browse flow", () => {
+  it("starts idle: displays browse sections, calls browse, and shows no demo titles", async () => {
+    const { client, search, browse } = fakeClient();
     renderWithApp(<DiscoverView client={client} />, emptyUserData());
-    expect(screen.getByText("Type a title to search AniList.")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Sample titles/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Trending Now" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Popular Manga" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Popular Manhwa" })).toBeInTheDocument();
+    expect(screen.queryByText(/Sample titles/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Neon Ronin")).not.toBeInTheDocument();
+    expect(search).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(browse).toHaveBeenCalled();
+  });
+
+  it("shows saved real titles in From Your Library at rest and filters by type", async () => {
+    const { client, search } = fakeClient();
+    const base = emptyUserData();
+    const saved = { ...base, savedTitles: { [moon.id]: moon, [tap.id]: tap }, library: {
+      [moon.id]: { seriesId: moon.id, status: "planned" as const, addedAt: NOW },
+      [tap.id]: { seriesId: tap.id, status: "reading" as const, addedAt: NOW },
+    } };
+    renderWithApp(<DiscoverView client={client} />, saved);
+    const list = screen.getByRole("list", { name: "Saved titles" });
+    expect(within(list).getByText("Moonlit Pharmacy (Fixture)")).toBeInTheDocument();
+    expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
+    expect(screen.queryByText("Neon Ronin")).not.toBeInTheDocument();
+    await user().click(screen.getByRole("button", { name: "Manhwa" }));
+    expect(within(list).queryByText("Moonlit Pharmacy (Fixture)")).not.toBeInTheDocument();
+    expect(within(list).getByText("Tap-eui Sigye")).toBeInTheDocument();
     expect(search).not.toHaveBeenCalled();
   });
+
+  it("switches browse sections when type chip is clicked", async () => {
+    const { client } = fakeClient();
+    renderWithApp(<DiscoverView client={client} />, emptyUserData());
+    await user().click(screen.getByRole("button", { name: "Manga" }));
+    expect(screen.getByRole("heading", { name: "Trending Manga" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Popular Manga" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Popular Manhwa" })).not.toBeInTheDocument();
+
+    await user().click(screen.getByRole("button", { name: "Manhwa" }));
+    expect(screen.getByRole("heading", { name: "Trending Manhwa" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Popular Manhwa" })).toBeInTheDocument();
+
+    await user().click(screen.getByRole("button", { name: "Manhua" }));
+    expect(screen.getByRole("heading", { name: "Trending Manhua" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Popular Manhua" })).toBeInTheDocument();
+  });
+
+  it("allows saving a title directly from a browse shelf card", async () => {
+    const { client } = fakeClient(async () => result(), async () => result([moon]));
+    const { store } = renderWithApp(<DiscoverView client={client} />, emptyUserData());
+    await act(async () => {});
+    const trending = screen.getByRole("list", { name: "Trending Now" });
+    const addButton = within(trending).getByRole("button", { name: "Add Moonlit Pharmacy (Fixture) to library" });
+    await user().click(addButton);
+    const data = store.getSnapshot()!;
+    expect(data.savedTitles["al-101"]).toMatchObject({ title: "Moonlit Pharmacy (Fixture)" });
+    expect(data.library["al-101"]?.status).toBe("planned");
+  });
+
+  it("renders shelf card link and save button as separate non-nested interactive elements", async () => {
+    const { client } = fakeClient(async () => result(), async () => result([moon]));
+    const { store } = renderWithApp(<DiscoverView client={client} />, emptyUserData());
+    await act(async () => {});
+    const trending = screen.getByRole("list", { name: "Trending Now" });
+    const cardLink = within(trending).getByRole("link", { name: "Open Moonlit Pharmacy (Fixture)" });
+    const saveButton = within(trending).getByRole("button", { name: "Add Moonlit Pharmacy (Fixture) to library" });
+
+    // Verify non-nested structure: save button is not inside the card link, and link is not inside button
+    expect(saveButton.closest("a")).toBeNull();
+    expect(cardLink.closest("button")).toBeNull();
+    expect(cardLink).toHaveAttribute("href", "/series/al-101");
+
+    // Clicking save button updates library without triggering link click
+    const linkClickSpy = vi.fn();
+    cardLink.addEventListener("click", linkClickSpy);
+    await user().click(saveButton);
+    expect(linkClickSpy).not.toHaveBeenCalled();
+    expect(store.getSnapshot()!.library["al-101"]?.status).toBe("planned");
+  });
+
+  it("shows an inline error and retry button if a browse section fails", async () => {
+    let calls = 0;
+    const { client } = fakeClient(
+      async () => result(),
+      async (opts) => {
+        if (opts.sort === "TRENDING_DESC" && ++calls === 1) {
+          throw new SearchError("server", "AniList is having trouble right now.");
+        }
+        return result([moon]);
+      },
+    );
+    renderWithApp(<DiscoverView client={client} />, emptyUserData());
+    await act(async () => {});
+    expect(screen.getByText("AniList is having trouble right now.")).toBeInTheDocument();
+    const retryBtn = screen.getByRole("button", { name: "Retry" });
+    await user().click(retryBtn);
+    await act(async () => {});
+    expect(screen.queryByText("AniList is having trouble right now.")).not.toBeInTheDocument();
+  });
+});
+
+describe("Discover · search flow", () => {
 
   it("debounces typing into a single search, showing loading until results arrive", async () => {
     const { client, search } = fakeClient();
@@ -55,7 +155,7 @@ describe("Discover · search flow", () => {
     expect(screen.queryByRole("list", { name: "Searching" })).not.toBeInTheDocument();
   });
 
-  it("does not search below the minimum length and keeps the demo samples", async () => {
+  it("does not search below the minimum length", async () => {
     const { client, search } = fakeClient();
     renderWithApp(<DiscoverView client={client} />, emptyUserData());
     await type("m");

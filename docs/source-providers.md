@@ -68,6 +68,10 @@ https://mangaplus.shueisha.co.jp/terms_web/eng/
 
 ## Live readable-path verification
 
+> Superseded for access decisions: this was a technical check that the transport
+> works, not a permission. In-app reading is now default-deny; see
+> [source-permissions.md](./source-permissions.md). Black Jack is not enabled.
+
 Give My Regards to Black Jack (AniList 31668; MangaDex
 9fca3c19-ac41-4ebf-8735-f4e3becc2b3e) returned 127 English chapters. Its first
 chapter, 1369226a-5c75-4bbf-b385-d884228a9cfe, returned a 60-page manifest and

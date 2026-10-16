@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Series } from "@/domain/types";
 import { MOCK_SERIES } from "@/data/mock-catalog";
 import { createDemoUserData } from "@/data/demo-user-data";
 import { getSeries } from "@/test/helpers";
@@ -178,6 +179,105 @@ describe("library & discover filtering", () => {
   it("only includes series that are in the library", () => {
     const d = addToLibrary(emptyUserData(), "neon-ronin", NOW);
     expect(filterLibrary(MOCK_SERIES, d, "all", "").map((s) => s.id)).toEqual(["neon-ronin"]);
+  });
+
+  it("filters library by type (manga, manhwa, manhua) and combines with status", () => {
+    // All types
+    expect(filterLibrary(MOCK_SERIES, demo, "all", "", "all")).toHaveLength(8);
+    // Manga only
+    const manga = filterLibrary(MOCK_SERIES, demo, "all", "", "manga");
+    expect(manga.every((s) => s.type === "manga")).toBe(true);
+    // Manhwa only
+    const manhwa = filterLibrary(MOCK_SERIES, demo, "all", "", "manhwa");
+    expect(manhwa.every((s) => s.type === "manhwa")).toBe(true);
+    // Combined: reading + manhwa
+    const readingManhwa = filterLibrary(MOCK_SERIES, demo, "reading", "", "manhwa");
+    expect(readingManhwa.every((s) => s.type === "manhwa" && demo.library[s.id]?.status === "reading")).toBe(true);
+  });
+
+  it("sorts library deterministically by recent-active, recent-added, title-asc, title-desc, and progress", () => {
+    // title-asc
+    const asc = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "title-asc");
+    for (let i = 0; i < asc.length - 1; i++) {
+      expect(asc[i]!.title.localeCompare(asc[i + 1]!.title)).toBeLessThanOrEqual(0);
+    }
+
+    // title-desc
+    const desc = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "title-desc");
+    for (let i = 0; i < desc.length - 1; i++) {
+      expect(desc[i]!.title.localeCompare(desc[i + 1]!.title)).toBeGreaterThanOrEqual(0);
+    }
+
+    // recent-added
+    const added = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "recent-added");
+    for (let i = 0; i < added.length - 1; i++) {
+      const ta = demo.library[added[i]!.id]!.addedAt;
+      const tb = demo.library[added[i + 1]!.id]!.addedAt;
+      expect(ta.localeCompare(tb)).toBeGreaterThanOrEqual(0);
+    }
+
+    // progress
+    const progressSorted = filterLibrary(MOCK_SERIES, demo, "all", "", "all", "progress");
+    // Rooftop Rivals has 100% progress completed, so it should be near or at the top
+    expect(progressSorted[0]!.id).toBe("rooftop-rivals");
+  });
+
+  it("sorts external AniList titles with recorded reading activity above unread titles in progress sort", () => {
+    const externalWithActivity: Series = {
+      id: "al-101",
+      title: "Moonlit Pharmacy (Fixture)",
+      type: "manga",
+      author: "Yuna Ashida",
+      year: 2022,
+      status: "ongoing",
+      genres: ["Slice of Life"],
+      hue: 168,
+      description: "A pharmacist serves ghosts.",
+      chapters: [], // external title has no complete chapter manifest
+      source: "anilist",
+    };
+    const unreadCatalogSeries = MOCK_SERIES.find((s) => s.id === "ash-and-ember-academy")!;
+    const unreadExternalSeries: Series = {
+      id: "al-202",
+      title: "Tap-eui Sigye",
+      type: "manhwa",
+      author: "Unknown",
+      year: 2024,
+      status: "completed",
+      genres: [],
+      hue: 200,
+      description: "",
+      chapters: [],
+      source: "anilist",
+    };
+
+    const combinedCatalog: Series[] = [unreadCatalogSeries, externalWithActivity, unreadExternalSeries];
+    let data = emptyUserData();
+    data = {
+      ...data,
+      library: {
+        "ash-and-ember-academy": { seriesId: "ash-and-ember-academy", status: "planned", addedAt: NOW },
+        "al-101": { seriesId: "al-101", status: "reading", addedAt: NOW },
+        "al-202": { seriesId: "al-202", status: "planned", addedAt: NOW },
+      },
+      progress: {
+        "al-101": {
+          lastChapterId: "md-chap-1",
+          updatedAt: NOW,
+          chapters: {
+            "md-chap-1": { page: 12, pageCount: 24, completed: true, atEnd: true, updatedAt: NOW },
+          },
+        },
+      },
+    };
+
+    const sorted = filterLibrary(combinedCatalog, data, "all", "", "all", "progress");
+    // al-101 (with actual recorded activity) must rank above the unread titles
+    expect(sorted[0]!.id).toBe("al-101");
+    // Both unread titles rank below al-101
+    expect(sorted.slice(1).map((s) => s.id)).toEqual(
+      expect.arrayContaining(["ash-and-ember-academy", "al-202"]),
+    );
   });
 
   it("searches the catalog by title, author or genre, with a type filter", () => {

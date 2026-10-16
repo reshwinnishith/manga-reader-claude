@@ -22,11 +22,12 @@ function ExternalSeries({ id }: { id: string }) {
   const externalId = Number(id.replace(/^al-/, ""));
   const validId = /^al-\d+$/.test(id) && Number.isSafeInteger(externalId);
   useEffect(() => {
-    if ((saved && saved.description) || !validId) return;
+    // Refresh once when the snapshot predates fields sources depend on (description, MyAnimeList ID).
+    if ((saved && saved.description && saved.malId !== undefined) || !validId) return;
     const controller = new AbortController();
     fetch(ANILIST_ENDPOINT, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "query ($id: Int) { Media(id: $id, type: MANGA) { id title { english romaji native } synonyms description(asHtml: false) coverImage { large } status chapters genres startDate { year } countryOfOrigin siteUrl staff(perPage: 10, sort: RELEVANCE) { edges { role node { name { full } } } } } }", variables: { id: externalId } }),
+      body: JSON.stringify({ query: "query ($id: Int) { Media(id: $id, type: MANGA) { id idMal title { english romaji native } synonyms description(asHtml: false) coverImage { large } status chapters genres startDate { year } countryOfOrigin siteUrl staff(perPage: 10, sort: RELEVANCE) { edges { role node { name { full } } } } } }", variables: { id: externalId } }),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
     }).then(async (r) => {
       if (!r.ok) throw new Error("AniList unavailable");
@@ -37,7 +38,7 @@ function ExternalSeries({ id }: { id: string }) {
     }).catch(() => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
   }, [id, saved, validId, externalId]);
-  const title = useMemo(() => saved ? (remote ? { ...saved, description: remote.description || saved.description } : saved) : remote, [saved, remote]);
+  const title = useMemo(() => saved ? (remote ? { ...saved, description: remote.description || saved.description, malId: saved.malId ?? remote.malId, alternateTitles: saved.alternateTitles?.length ? saved.alternateTitles : remote.alternateTitles } : saved) : remote, [saved, remote]);
   const series = useMemo(() => title ? seriesFromSaved(title) : null, [title]);
   if (!data || (!series && !failed && validId)) return <BlockSkeleton height={320} />;
   if (!series || !title) return <EmptyState title="Couldn't load this title" body="Check your connection and try searching again." action={{ href: "/discover", label: "Discover" }} />;

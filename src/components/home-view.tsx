@@ -22,7 +22,7 @@ export function HomeView() {
       externalContinue: Object.values(data.savedTitles).filter((s) => data.library[s.id] && !isInactiveStatus(data.library[s.id]!.status) && data.progress[s.id]?.chapters[data.progress[s.id]!.lastChapterId]).sort((a, b) => data.progress[b.id]!.updatedAt.localeCompare(data.progress[a.id]!.updatedAt)),
       continueItems: getContinueReading(catalog, data).filter((item) => !item.series.id.startsWith("demo-") && !item.series.id.startsWith("sample-")),
       newChapters: getNewChapters(catalog, data),
-      recent: getRecentlyAdded(catalog, data).filter((s) => s.id.startsWith("al-")).slice(0, 10),
+      recent: getRecentlyAdded(catalog, data).filter((s) => !!s.source).slice(0, 10),
     };
   }, [catalog, data]);
 

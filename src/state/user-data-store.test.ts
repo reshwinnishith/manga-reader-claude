@@ -155,4 +155,28 @@ describe("user data store", () => {
     expect(b.savedTitles["al-101"]).toEqual(SAVED);
     expect(b.library["al-101"]?.status).toBe("planned");
   });
+
+  it("records bounded recently-opened history without adding titles to Library", () => {
+    const store = createUserDataStore({ adapter: createMemoryAdapter() });
+    const title = {
+      id: "kt-24147",
+      source: "kitsu" as const,
+      externalId: "24147",
+      title: "One-Punch Man",
+      type: "manga" as const,
+      description: "",
+      genres: [],
+      authors: [],
+      status: "ongoing" as const,
+      url: "https://kitsu.app/manga/24147",
+      fetchedAt: "now",
+    };
+    for (let i = 0; i < 14; i++) store.recordOpened({ ...title, id: `kt-${i}`, externalId: String(i) });
+    const last = store.getSnapshot()!;
+    expect(last.recentlyOpened).toHaveLength(12);
+    expect(last.recentlyOpened?.[0]?.title.id).toBe("kt-13");
+    expect(last.library).toEqual({});
+    store.recordOpened({ ...title, id: "kt-13", externalId: "13" });
+    expect(store.getSnapshot()).toBe(last);
+  });
 });

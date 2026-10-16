@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { READING_STATUSES, type Series, type SavedTitle } from "@/domain/types";
 import { formatChapterNumber, formatDate, pluralize } from "@/lib/format";
 import { getChapterState, getResumeTarget, getSeriesProgressFraction } from "@/lib/selectors";
+import { readerUrl } from "@/services/reading-sources";
 import { useUserData } from "@/state/use-user-data";
 import { AddToLibraryButton, SaveTitleButton } from "./add-button";
 import { Cover } from "./cover";
@@ -32,6 +33,11 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
     () => (newestFirst ? [...series.chapters].reverse() : series.chapters),
     [series.chapters, newestFirst],
   );
+  // AniList titles have empty catalogue chapters; resume from saved MangaDex progress instead.
+  const sourceChapter = series.source && progress ? progress.chapters[progress.lastChapterId] : undefined;
+  const sourceResumeHref = sourceChapter && !sourceChapter.atEnd
+    ? readerUrl({ id: progress!.lastChapterId, number: "" }, series.id)
+    : null;
 
   const ctaLabel =
     !data || !target ? "Start reading"
@@ -72,6 +78,12 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
           >
             <PlayIcon width={20} height={20} /> {ctaLabel}
           </Link>
+        ) : sourceResumeHref && sourceChapter ? (
+          <Link className="btn btn--primary btn--large" href={sourceResumeHref}>
+            <PlayIcon width={20} height={20} /> Continue · page {sourceChapter.page + 1}
+          </Link>
+        ) : sourceChapter?.atEnd ? (
+          <span className="btn btn--secondary btn--large" aria-disabled="true">Chapter finished · choose next below</span>
         ) : (
           !series.source && <span className="btn btn--secondary btn--large" aria-disabled="true">No chapters yet</span>
         )}
@@ -91,6 +103,14 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
           <ProgressBar value={fraction} label={`${series.title} reading progress`} />
         </div>
       )}
+      {data && sourceChapter && (
+        <div className="progress-block">
+          <div className="progress-block__row">
+            <span>{sourceChapter.atEnd ? "Last chapter finished" : `Resume page ${sourceChapter.page + 1} of ${sourceChapter.pageCount}`}</span>
+          </div>
+          <ProgressBar value={sourceChapter.pageCount ? (sourceChapter.atEnd ? 1 : (sourceChapter.page + 1) / sourceChapter.pageCount) : 0} label={`${series.title} reading progress`} />
+        </div>
+      )}
 
       {entry && (
         <div className="chips" role="group" aria-label="Reading status">
@@ -107,6 +127,21 @@ export function SeriesView({ series, savedTitle }: { series: Series; savedTitle?
           ))}
         </div>
       )}
+
+      {savedTitle?.alternateTitles?.length ? (
+        <details className="section">
+          <summary>Alternate titles</summary>
+          <ul>
+            {savedTitle.alternateTitles
+              .filter((t) => t !== series.title)
+              .map((t) => (
+                <li key={t} lang={/[ぁ-龯]/.test(t) ? "ja" : undefined}>
+                  {t}
+                </li>
+              ))}
+          </ul>
+        </details>
+      ) : null}
 
       <section className="section">
         <p className={`desc ${expanded ? "" : "desc--clamped"}`}>{series.description}</p>

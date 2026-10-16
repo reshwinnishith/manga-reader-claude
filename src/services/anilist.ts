@@ -1,4 +1,5 @@
 import type { PublicationStatus, SavedTitle, SeriesType } from "@/domain/types";
+import { publisherLink } from "./official-links";
 import { cleanDescription } from "@/lib/clean-description";
 
 /**
@@ -18,7 +19,11 @@ import { cleanDescription } from "@/lib/clean-description";
 export const ANILIST_ENDPOINT = "https://graphql.anilist.co";
 export const ANILIST_SITE = "https://anilist.co";
 export const PAGE_SIZE = 20;
+export const BROWSE_PAGE_SIZE = 20;
 export const MIN_QUERY_LENGTH = 2;
+
+/** Sorting modes supported by the browse() API. */
+export type BrowseSort = "TRENDING_DESC" | "POPULARITY_DESC";
 
 export type CountryFilter = "all" | "JP" | "KR" | "CN";
 
@@ -42,22 +47,31 @@ export interface SearchResult {
   page: number;
 }
 
-const SEARCH_QUERY = /* GraphQL */ `
-  query ($search: String, $page: Int, $perPage: Int, $country: CountryCode) {
+export type BrowseResult = SearchResult;
+
+export interface BrowseOptions {
+  sort: BrowseSort;
+  country?: CountryFilter;
+  page?: number;
+  signal?: AbortSignal;
+}
+
+const BROWSE_QUERY = /* GraphQL */ `
+  query ($page: Int, $perPage: Int, $sort: [MediaSort], $country: CountryCode) {
     Page(page: $page, perPage: $perPage) {
       pageInfo {
         hasNextPage
         currentPage
       }
       media(
-        search: $search
         type: MANGA
         format_not: NOVEL
         isAdult: false
         countryOfOrigin: $country
-        sort: SEARCH_MATCH
+        sort: $sort
       ) {
         id
+        idMal
         title {
           romaji
           english
@@ -77,6 +91,64 @@ const SEARCH_QUERY = /* GraphQL */ `
         }
         countryOfOrigin
         siteUrl
+        externalLinks { site url language }
+        staff(perPage: 10, sort: RELEVANCE) {
+          edges {
+            role
+            node {
+              name {
+                full
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// All-countries variant: drops the countryOfOrigin variable entirely (same reason as search).
+const ALL_COUNTRIES_BROWSE_QUERY = BROWSE_QUERY
+  .replace(", $country: CountryCode", "")
+  .replace("        countryOfOrigin: $country\n", "");
+
+const SEARCH_QUERY = /* GraphQL */ `
+  query ($search: String, $page: Int, $perPage: Int, $country: CountryCode) {
+    Page(page: $page, perPage: $perPage) {
+      pageInfo {
+        hasNextPage
+        currentPage
+      }
+      media(
+        search: $search
+        type: MANGA
+        format_not: NOVEL
+        isAdult: false
+        countryOfOrigin: $country
+        sort: SEARCH_MATCH
+      ) {
+        id
+        idMal
+        title {
+          romaji
+          english
+          native
+        }
+        synonyms
+        description(asHtml: false)
+        coverImage {
+          large
+        }
+        format
+        status
+        chapters
+        genres
+        startDate {
+          year
+        }
+        countryOfOrigin
+        siteUrl
+        externalLinks { site url language }
         staff(perPage: 10, sort: RELEVANCE) {
           edges {
             role
@@ -171,6 +243,7 @@ export function typeFromCountry(country: string | null | undefined): SeriesType 
 
 interface RawMedia {
   id?: unknown;
+  idMal?: unknown;
   title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
   synonyms?: unknown;
   description?: string | null;
@@ -181,6 +254,7 @@ interface RawMedia {
   startDate?: { year?: number | null } | null;
   countryOfOrigin?: string | null;
   siteUrl?: string | null;
+  externalLinks?: { site?: string; url?: string; language?: string }[] | null;
   staff?: { edges?: { role?: string | null; node?: { name?: { full?: string | null } | null } | null }[] | null } | null;
 }
 
@@ -206,6 +280,9 @@ export function normalizeMedia(raw: unknown, fetchedAt: string): SavedTitle | nu
     id: `al-${id}`,
     source: "anilist",
     externalId: id,
+    malId: typeof m.idMal === "number" && Number.isSafeInteger(m.idMal) && m.idMal > 0 ? m.idMal : undefined,
+    externalIds: { anilist: String(id), ...(typeof m.idMal === "number" ? { mal: String(m.idMal) } : {}) },
+    officialLinks: (m.externalLinks || []).map((link) => publisherLink(link.url, link.language)).filter((l): l is NonNullable<typeof l> => !!l),
     title,
     type: typeFromCountry(m.countryOfOrigin),
     description: cleanDescription(m.description),
@@ -234,17 +311,20 @@ export interface AniListClientDeps {
   fetchImpl?: typeof fetch;
   limiter?: RateLimiter;
   cache?: SearchCache;
+  browseCache?: SearchCache;
   now?: () => Date;
 }
 
 export interface AniListClient {
   search(options: SearchOptions): Promise<SearchResult>;
+  browse(options: BrowseOptions): Promise<BrowseResult>;
 }
 
 export function createAniListClient(deps: AniListClientDeps = {}): AniListClient {
   const fetchImpl = deps.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
   const limiter = deps.limiter ?? createRateLimiter();
   const cache = deps.cache ?? createSearchCache();
+  const browseCache = deps.browseCache ?? createSearchCache(15 * 60_000, 30);
   const now = deps.now ?? (() => new Date());
 
   return {
@@ -317,6 +397,74 @@ export function createAniListClient(deps: AniListClientDeps = {}): AniListClient
       }
       const result: SearchResult = { items, hasNextPage: data.data?.Page?.pageInfo?.hasNextPage === true, page };
       cache.set(key, result);
+      return result;
+    },
+    async browse({ sort, country = "all", page = 1, signal }: BrowseOptions): Promise<BrowseResult> {
+      const key = `browse|${sort}|${country}|${page}`;
+      const cached = browseCache.get(key);
+      if (cached) return cached;
+
+      const wait = limiter.take();
+      if (wait > 0) {
+        throw new SearchError("rate-limited", `Too many requests. Try again in ${wait}s.`, wait);
+      }
+
+      let response: Response;
+      try {
+        response = await fetchImpl(ANILIST_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            query: country === "all" ? ALL_COUNTRIES_BROWSE_QUERY : BROWSE_QUERY,
+            variables: country === "all"
+              ? { sort: [sort], page, perPage: BROWSE_PAGE_SIZE }
+              : { sort: [sort], page, perPage: BROWSE_PAGE_SIZE, country },
+          }),
+          signal,
+          referrerPolicy: "no-referrer",
+          credentials: "omit",
+        });
+      } catch (err) {
+        if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+          throw new SearchError("aborted", "Browse cancelled");
+        }
+        throw new SearchError("offline", "Couldn't reach AniList. Check your connection and try again.");
+      }
+
+      if (response.status === 429) {
+        const header = Number(response.headers.get("Retry-After"));
+        const seconds = Number.isFinite(header) && header > 0 ? Math.ceil(header) : 60;
+        limiter.blockFor(seconds);
+        throw new SearchError("rate-limited", `AniList asked us to slow down. Try again in ${seconds}s.`, seconds);
+      }
+      if (response.status >= 500) {
+        throw new SearchError("server", "AniList is having trouble right now. Try again in a moment.");
+      }
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new SearchError("bad-response", "AniList sent a response we couldn't read.");
+      }
+      const data = body as { data?: { Page?: { pageInfo?: { hasNextPage?: boolean }; media?: unknown } } | null; errors?: unknown };
+      const media = data?.data?.Page?.media;
+      if (!response.ok || data?.errors || !Array.isArray(media)) {
+        throw new SearchError("bad-response", "AniList sent an unexpected response. Please try again later.");
+      }
+
+      const fetchedAt = now().toISOString();
+      const seen = new Set<string>();
+      const items: SavedTitle[] = [];
+      for (const raw of media) {
+        const item = normalizeMedia(raw, fetchedAt);
+        if (item && !seen.has(item.id)) {
+          seen.add(item.id);
+          items.push(item);
+        }
+      }
+      const result: BrowseResult = { items, hasNextPage: data.data?.Page?.pageInfo?.hasNextPage === true, page };
+      browseCache.set(key, result);
       return result;
     },
   };
