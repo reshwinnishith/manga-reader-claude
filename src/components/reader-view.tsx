@@ -8,8 +8,9 @@ import { formatChapterLabel, formatChapterNumber } from "@/lib/format";
 import { isEndIndex, pageForIndex, pickVerticalIndex } from "@/lib/reader-position";
 import { getChapterStartPage } from "@/lib/selectors";
 import { useUserData } from "@/state/use-user-data";
-import { BackIcon, PagedIcon, ScrollIcon, SkipNextIcon, SkipPrevIcon } from "./icons";
+import { BackIcon, HomeIcon, PagedIcon, ScrollIcon, SkipNextIcon, SkipPrevIcon } from "./icons";
 import { PlaceholderPage } from "./placeholder-page";
+import { QuickScrubber } from "./quick-scrubber";
 
 /** Ignore forward gestures this soon after arriving on the end card (prevents skipping a chapter). */
 const END_CARD_GRACE_MS = 450;
@@ -105,13 +106,32 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
   const hideControls = useCallback(() => setControls(false), []);
   const toggleControls = useCallback(() => setControls((v) => !v), []);
 
+  const handleNextChapter = useCallback(() => {
+    actions.recordProgress(series, chapter.id, lastPage, true);
+  }, [actions, series, chapter.id, lastPage]);
+
+  const scrubTime = useRef(0);
+
   const goTo = useCallback(
     (target: number) => {
       const clamped = Math.max(0, Math.min(target, pageCount));
       setIndex(clamped);
       if (mode === "vertical") {
         const el = document.getElementById(isEndIndex(clamped, pageCount) ? "reader-end" : `reader-page-${clamped}`);
-        el?.scrollIntoView({ block: "start" });
+        typeof el?.scrollIntoView === "function" && el.scrollIntoView({ block: "start" });
+      }
+    },
+    [mode, pageCount],
+  );
+
+  const onScrub = useCallback(
+    (target: number) => {
+      scrubTime.current = Date.now();
+      const clamped = Math.max(0, Math.min(target, pageCount - 1));
+      setIndex(clamped);
+      if (mode === "vertical") {
+        const el = document.getElementById(`reader-page-${clamped}`);
+        typeof el?.scrollIntoView === "function" && el.scrollIntoView({ block: "start" });
       }
     },
     [mode, pageCount],
@@ -123,9 +143,10 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
     if (index < pageCount) {
       goTo(index + 1);
     } else if (nextHref && Date.now() - arrivedAtEnd.current > END_CARD_GRACE_MS) {
+      handleNextChapter();
       router.push(nextHref);
     }
-  }, [index, pageCount, goTo, hideControls, nextHref, router]);
+  }, [index, pageCount, goTo, hideControls, nextHref, router, handleNextChapter]);
 
   const back = useCallback(() => {
     hideControls();
@@ -174,16 +195,28 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           <span className="reader__series">{series.title}</span>
           <span className="reader__chapter">{formatChapterLabel(chapter)}</span>
         </div>
-        <button
-          type="button"
-          className="icon-btn icon-btn--labeled"
-          onClick={toggleMode}
-          aria-label={mode === "vertical" ? "Switch to paged right-to-left mode" : "Switch to vertical scroll mode"}
-        >
-          {mode === "vertical" ? <PagedIcon /> : <ScrollIcon />}
-          <span>{mode === "vertical" ? "Paged" : "Scroll"}</span>
-        </button>
+        <div className="reader__actions-right">
+          <button
+            type="button"
+            className="icon-btn icon-btn--labeled"
+            onClick={toggleMode}
+            aria-label={mode === "vertical" ? "Switch to paged right-to-left mode" : "Switch to vertical scroll mode"}
+          >
+            {mode === "vertical" ? <PagedIcon /> : <ScrollIcon />}
+            <span>{mode === "vertical" ? "Paged" : "Scroll"}</span>
+          </button>
+          <Link href="/" className="icon-btn" aria-label="Home">
+            <HomeIcon />
+          </Link>
+        </div>
       </header>
+
+      <QuickScrubber
+        pageCount={pageCount}
+        currentPage={shownPage}
+        visible={controls}
+        onPageChange={onScrub}
+      />
 
       {mode === "vertical" ? (
         <VerticalPages
@@ -192,9 +225,16 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           chapter={chapter}
           next={next}
           initialIndex={index}
-          onIndexChange={setIndex}
+          onIndexChange={(newIndex) => {
+            if (Date.now() - scrubTime.current < 600) {
+              setIndex(Math.min(pageCount - 1, newIndex));
+            } else {
+              setIndex(newIndex);
+            }
+          }}
           onTap={toggleControls}
           onScrollAway={hideControls}
+          onNextChapter={handleNextChapter}
         />
       ) : (
         <PagedPages
@@ -206,6 +246,7 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           forward={forward}
           back={back}
           onTapCenter={toggleControls}
+          onNextChapter={handleNextChapter}
         />
       )}
 
@@ -225,7 +266,7 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
             max={Math.max(lastPage, 0)}
             value={shownPage}
             dir={mode === "paged-rtl" ? "rtl" : "ltr"}
-            onChange={(e) => goTo(Number(e.target.value))}
+            onChange={(e) => onScrub(Number(e.target.value))}
             aria-label="Page"
             aria-valuetext={`Page ${shownPage + 1} of ${pageCount}`}
           />
@@ -235,7 +276,12 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
         </div>
 
         {next ? (
-          <Link href={`/read/${series.id}/${next.id}`} className="icon-btn" aria-label={`Next chapter, ${formatChapterNumber(next.number)}`}>
+          <Link
+            href={`/read/${series.id}/${next.id}`}
+            className="icon-btn"
+            aria-label={`Next chapter, ${formatChapterNumber(next.number)}`}
+            onClick={handleNextChapter}
+          >
             <SkipNextIcon />
           </Link>
         ) : (
@@ -253,10 +299,11 @@ interface EndCardProps {
   chapter: Chapter;
   next?: Chapter;
   onBack?: () => void;
+  onNextChapter?: () => void;
 }
 
 /** What follows the last page: the way into the next chapter, or a clear caught-up state. */
-function EndCard({ series, chapter, next, onBack }: EndCardProps) {
+function EndCard({ series, chapter, next, onBack, onNextChapter }: EndCardProps) {
   const finishedSeries = series.status === "completed";
   return (
     <div className="endcard">
@@ -265,7 +312,11 @@ function EndCard({ series, chapter, next, onBack }: EndCardProps) {
         <>
           <h2 className="endcard__title">Up next: {formatChapterNumber(next.number)}</h2>
           {next.title.trim().toLowerCase() !== `chapter ${next.number}` && <p className="muted">{next.title}</p>}
-          <Link href={`/read/${series.id}/${next.id}`} className="btn btn--primary btn--large">
+          <Link
+            href={`/read/${series.id}/${next.id}`}
+            className="btn btn--primary btn--large"
+            onClick={onNextChapter}
+          >
             Continue to next chapter
           </Link>
         </>
@@ -295,14 +346,18 @@ interface VerticalProps {
   onIndexChange: (index: number) => void;
   onTap: () => void;
   onScrollAway: () => void;
+  onNextChapter?: () => void;
 }
 
 /** Continuous vertical scroll (manhwa/webtoon style). */
-function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onTap, onScrollAway }: VerticalProps) {
+function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onTap, onScrollAway, onNextChapter }: VerticalProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
   const frame = useRef(0);
   const initial = useRef(initialIndex);
+  const touch = useRef<{ x: number; y: number } | null>(null);
+  const swiped = useRef(false);
+  const lastTouchTime = useRef(0);
 
   // Restore the saved position before first paint.
   useLayoutEffect(() => {
@@ -338,8 +393,40 @@ function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onT
       tabIndex={0}
       role="region"
       aria-label={`${series.title} ${formatChapterLabel(chapter)} continuous scroll`}
+      onTouchStart={(e) => {
+        if ((e.target as HTMLElement).closest("a,button,.quick-scrubber")) {
+          touch.current = null;
+          return;
+        }
+        const t = e.touches[0];
+        touch.current = t ? { x: t.clientX, y: t.clientY } : null;
+        swiped.current = false;
+      }}
+      onTouchMove={(e) => {
+        const start = touch.current;
+        const t = e.touches[0];
+        if (start && t && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) {
+          swiped.current = true;
+        }
+      }}
+      onTouchEnd={(e) => {
+        lastTouchTime.current = Date.now();
+        if ((e.target as HTMLElement).closest("a,button,.quick-scrubber")) {
+          touch.current = null;
+          return;
+        }
+        const start = touch.current;
+        const t = e.changedTouches[0];
+        touch.current = null;
+        if (!start || !t) return;
+        const dist = Math.hypot(t.clientX - start.x, t.clientY - start.y);
+        if (dist < 15 && !swiped.current) {
+          onTap();
+        }
+      }}
       onClick={(e) => {
-        if ((e.target as HTMLElement).closest("a,button")) return;
+        if ((e.target as HTMLElement).closest("a,button,.quick-scrubber")) return;
+        if (Date.now() - lastTouchTime.current < 600) return;
         onTap();
       }}
       onScroll={(e) => {
@@ -365,7 +452,7 @@ function VerticalPages({ series, chapter, next, initialIndex, onIndexChange, onT
         </div>
       ))}
       <div id="reader-end">
-        <EndCard series={series} chapter={chapter} next={next} />
+        <EndCard series={series} chapter={chapter} next={next} onNextChapter={onNextChapter} />
       </div>
     </div>
   );
@@ -379,6 +466,7 @@ interface PagedProps {
   forward: () => void;
   back: () => void;
   onTapCenter: () => void;
+  onNextChapter?: () => void;
 }
 
 /**
@@ -386,9 +474,10 @@ interface PagedProps {
  * right tap / swipe left = back. After the last page comes the end card;
  * going forward once more continues to the next chapter.
  */
-function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }: PagedProps) {
+function PagedPages({ series, chapter, next, index, forward, back, onTapCenter, onNextChapter }: PagedProps) {
   const touch = useRef<{ x: number; y: number } | null>(null);
   const isEnd = isEndIndex(index, chapter.pageCount);
+  const swiped = useRef(false);
 
   return (
     <div
@@ -399,6 +488,7 @@ function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }
       onTouchStart={(e) => {
         const t = e.touches[0];
         touch.current = t ? { x: t.clientX, y: t.clientY } : null;
+        swiped.current = false;
       }}
       onTouchEnd={(e) => {
         const start = touch.current;
@@ -408,6 +498,7 @@ function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }
         const dx = t.clientX - start.x;
         const dy = t.clientY - start.y;
         if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          swiped.current = true;
           // Swiping right turns to the next page in right-to-left reading.
           if (dx > 0) forward();
           else back();
@@ -415,7 +506,7 @@ function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }
       }}
     >
       {isEnd ? (
-        <EndCard series={series} chapter={chapter} next={next} onBack={back} />
+        <EndCard series={series} chapter={chapter} next={next} onBack={back} onNextChapter={onNextChapter} />
       ) : (
         <PlaceholderPage
           className="ppage"
@@ -436,7 +527,15 @@ function PagedPages({ series, chapter, next, index, forward, back, onTapCenter }
         onClick={forward}
         disabled={isEnd && !next}
       />
-      <button type="button" className="zone zone--center" aria-label="Show or hide controls" onClick={onTapCenter} />
+      <button
+        type="button"
+        className="zone zone--center"
+        aria-label="Show or hide controls"
+        onClick={() => {
+          if (swiped.current) return;
+          onTapCenter();
+        }}
+      />
       <button type="button" className="zone zone--right" aria-label="Previous page" onClick={back} disabled={index === 0} />
     </div>
   );

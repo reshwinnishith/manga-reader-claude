@@ -18,6 +18,8 @@ const release = (chapterId: string, number: string, extra: Record<string, unknow
   id: chapterId, number, volume: "", title: "", language: "en", pages: 3, groups: ["Test team"], publishedAt: "2026-01-01", readable: true, ...extra,
 });
 
+Element.prototype.scrollIntoView = () => {};
+
 beforeEach(() => {
   vi.stubGlobal("scrollTo", vi.fn());
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -28,7 +30,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("saves only loaded pages, retries failures, and completes only on explicit finish", async () => {
+it("saves only loaded pages, retries failures, and completes automatically when advancing past final page", async () => {
   const user = userEvent.setup();
   const data = initial(); data.readerModes[title.id] = "paged-rtl";
   const { store } = renderWithApp(<MangaDexReader id={id} group="untrusted query" seriesId={title.id} />, data);
@@ -46,7 +48,7 @@ it("saves only loaded pages, retries failures, and completes only on explicit fi
   await user.click(screen.getByRole("button", { name: "Next page" }));
   fireEvent.load(screen.getByRole("img", { name: "Page 3" }));
   expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, completed: false });
-  await user.click(screen.getByRole("button", { name: "Finish chapter" }));
+  await user.click(screen.getByRole("button", { name: "Next page" }));
   expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
   expect(store.getSnapshot()?.library[title.id]?.status).toBe("reading");
   expect(screen.getByText(/Translation: Test team/)).toBeInTheDocument();
@@ -198,8 +200,7 @@ it("offers continue to next chapter upon finishing and allows retry when navigat
   await user.click(screen.getByRole("button", { name: "Next page" }));
   const lastImg = screen.getByRole("img", { name: "Page 3" });
   fireEvent.load(lastImg);
-
-  await user.click(screen.getByRole("button", { name: "Finish chapter" }));
+  await user.click(screen.getByRole("button", { name: "Next page" }));
 
   expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
   expect(screen.getByRole("link", { name: "Continue to next chapter" })).toHaveAttribute("href", expect.stringContaining(`/mangadex/read/${second}`));
@@ -257,8 +258,7 @@ it("ignores tap gestures originating on interactive elements while preserving in
   expect(screen.getByText("Page 2 / 3")).toBeInTheDocument();
 });
 
-it("in vertical scroll mode, loading the final image leaves Finish chapter disabled until the reader genuinely reaches the final page", async () => {
-  const user = userEvent.setup();
+it("in vertical scroll mode, loading the final image does not complete until the reader genuinely reaches the final page", async () => {
   const PAGE_H = 600;
 
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
@@ -281,9 +281,7 @@ it("in vertical scroll mode, loading the final image leaves Finish chapter disab
   // Load the final image while the user is still at the top of the chapter (scrollTop = 0, page = 0)
   fireEvent.load(page3);
 
-  // Loading the final image must NOT enable Finish chapter
-  const finishBtn = screen.getByRole("button", { name: "Finish chapter" });
-  expect(finishBtn).toBeDisabled();
+  // Loading the final image must NOT complete the chapter while at the top
   expect(screen.getByText(/Scroll to the final page/)).toBeInTheDocument();
   expect(store.getSnapshot()?.progress[title.id]).toBeUndefined();
 
@@ -291,12 +289,8 @@ it("in vertical scroll mode, loading the final image leaves Finish chapter disab
   scrollTop = 1200;
   fireEvent.scroll(window);
 
-  // Once genuinely reached and loaded, Finish chapter becomes available
-  expect(finishBtn).not.toBeDisabled();
-  await user.click(finishBtn);
-
-  expect(finishBtn).toHaveTextContent("Chapter finished");
-  expect(finishBtn).toBeDisabled();
+  // Once genuinely reached and loaded, the chapter completes automatically
+  expect(screen.getByText("Chapter complete.")).toBeInTheDocument();
   expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({ page: 2, atEnd: true, completed: true });
 });
 
@@ -308,3 +302,95 @@ it("provides a direct back to series recovery link when chapter fails to load", 
   expect(screen.getByRole("button", { name: "Retry chapter" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Back to series" })).toHaveAttribute("href", `/series/${title.id}`);
 });
+
+it("renders Home and Settings controls on right of overlay and supports quick scrubber", async () => {
+  const data = initial();
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  expect(await screen.findByRole("img", { name: "Page 1" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+  expect(screen.getByRole("button", { name: /Switch to paged/ })).toBeInTheDocument();
+
+  const scrubber = screen.getByRole("slider", { name: "Quick page scrubber" });
+  expect(scrubber).toBeInTheDocument();
+  expect(scrubber).toHaveAttribute("aria-valuenow", "1");
+  expect(scrubber).toHaveAttribute("aria-valuemax", "3");
+});
+
+it("advancing to next chapter from bottom bar marks the current chapter complete", async () => {
+  const user = userEvent.setup();
+  const data = initial();
+  data.readerModes[title.id] = "paged-rtl";
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  expect(await screen.findByRole("img", { name: "Page 1" })).toBeInTheDocument();
+  expect(store.getSnapshot()?.progress[title.id]).toBeUndefined();
+
+  const nextLink = await screen.findByRole("link", { name: "Chapter 2 →" });
+  await user.click(nextLink);
+
+  expect(store.getSnapshot()?.progress[title.id]?.chapters[id]).toMatchObject({
+    page: 2,
+    atEnd: true,
+    completed: true,
+  });
+});
+
+it("single iPhone tap produces exactly one overlay toggle in scroll mode, ignoring synthetic clicks", async () => {
+  const data = initial();
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  await screen.findByRole("img", { name: "Page 1" });
+  const surface = document.querySelector(".source-reader__pages")!;
+  const readerEl = document.querySelector(".source-reader")!;
+
+  expect(readerEl).toHaveAttribute("data-controls", "visible");
+
+  // Simulate iPhone single tap: touchStart + touchEnd + synthetic click
+  fireEvent.touchStart(surface, { touches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.click(surface, { clientX: 200, clientY: 300 });
+
+  expect(readerEl).toHaveAttribute("data-controls", "hidden");
+
+  // Second iPhone single tap: toggles back to visible
+  fireEvent.touchStart(surface, { touches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.click(surface, { clientX: 200, clientY: 300 });
+
+  expect(readerEl).toHaveAttribute("data-controls", "visible");
+});
+
+it("quick scrubbing to the final page in scroll mode does not automatically mark chapter complete", async () => {
+  const PAGE_H = 600;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    cb(0);
+    return 1;
+  });
+
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 390, width: 390, x: 0, y: top, toJSON() {} }) as DOMRect;
+    if (this.classList.contains("quick-scrubber__hit-area")) return rect(100, 400);
+    if (this.dataset.page !== undefined) return rect(Number(this.dataset.page) * PAGE_H, PAGE_H);
+    if (this.id === "source-reader-end") return rect(3 * PAGE_H, 400);
+    return rect(0, 0);
+  });
+
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  await screen.findByRole("img", { name: "Page 1" });
+
+  const scrubber = screen.getByRole("slider", { name: "Quick page scrubber" });
+
+  // Quick scrub to the final page (page 3, index 2)
+  fireEvent.pointerDown(scrubber, { clientY: 500, pointerId: 1 });
+  fireEvent.pointerMove(scrubber, { clientY: 500, pointerId: 1 });
+  fireEvent.pointerUp(scrubber, { clientY: 500, pointerId: 1 });
+
+  // Must update indicator to Page 3 / 3
+  expect(screen.getByText("Page 3 / 3")).toBeInTheDocument();
+
+  // Scrubbing to final page must NOT mark the chapter completed
+  expect(store.getSnapshot()?.progress[title.id]?.chapters[id]?.completed).toBeFalsy();
+  expect(screen.getByText(/Scroll to the final page to complete/)).toBeInTheDocument();
+});
+
