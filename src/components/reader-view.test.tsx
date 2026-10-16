@@ -442,3 +442,71 @@ describe("Reader · errors and setup", () => {
     expect(screen.getByRole("region", { name: /The Last Cartographer.*continuous scroll/i })).toBeInTheDocument();
   });
 });
+
+describe("Reader v1.1 · Navigation overlay, Quick scrubber & Auto-progress", () => {
+  it("renders Home and Settings controls on the right of the top overlay", () => {
+    renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("button", { name: /Switch to vertical/ })).toBeInTheDocument();
+  });
+
+  it("scrubbing first, middle and last pages updates position without falsely completing", () => {
+    const r = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    const scrubber = screen.getByRole("slider", { name: "Quick page scrubber" });
+
+    vi.spyOn(scrubber, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+      bottom: 500,
+      height: 400,
+      left: 10,
+      right: 54,
+      width: 44,
+      x: 10,
+      y: 100,
+      toJSON: () => {},
+    });
+
+    // Scrub to middle (fraction 0.5 -> page 8 of 16)
+    fireEvent.pointerDown(scrubber, { clientY: 300, pointerId: 1 });
+    expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 8, completed: false, atEnd: false });
+
+    // Scrub to last page (fraction 1.0 -> page 15)
+    fireEvent.pointerMove(scrubber, { clientY: 500, pointerId: 1 });
+    expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 15, completed: false, atEnd: false });
+
+    // Scrub back to first page (fraction 0 -> page 0)
+    fireEvent.pointerMove(scrubber, { clientY: 100, pointerId: 1 });
+    expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 0, completed: false, atEnd: false });
+  });
+
+  it("advancing to next chapter from footer automatically marks previous chapter complete", async () => {
+    const user = userEvent.setup();
+    const r = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 0, completed: false });
+
+    const nextBtn = screen.getByRole("link", { name: /Next chapter, Ch\. 2/ });
+    await user.click(nextBtn);
+
+    // Current chapter is now marked completed
+    expect(chapterProgress(r, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+  });
+
+  it("quick scrubber is visible when controls are visible and hidden when controls are hidden", async () => {
+    const user = userEvent.setup();
+    renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+
+    const scrubberAside = screen.getByLabelText("Page scrubber");
+    expect(scrubberAside).toHaveClass("quick-scrubber--visible");
+
+    // Toggle controls off
+    await user.click(screen.getByRole("button", { name: "Show or hide controls" }));
+    expect(scrubberAside).toHaveClass("quick-scrubber--hidden");
+    expect(scrubberAside).toHaveAttribute("aria-hidden", "true");
+
+    // Toggle controls on
+    await user.click(screen.getByRole("button", { name: "Show or hide controls" }));
+    expect(scrubberAside).toHaveClass("quick-scrubber--visible");
+    expect(scrubberAside).toHaveAttribute("aria-hidden", "false");
+  });
+});
+

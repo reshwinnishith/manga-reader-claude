@@ -8,8 +8,9 @@ import { formatChapterLabel, formatChapterNumber } from "@/lib/format";
 import { isEndIndex, pageForIndex, pickVerticalIndex } from "@/lib/reader-position";
 import { getChapterStartPage } from "@/lib/selectors";
 import { useUserData } from "@/state/use-user-data";
-import { BackIcon, PagedIcon, ScrollIcon, SkipNextIcon, SkipPrevIcon } from "./icons";
+import { BackIcon, HomeIcon, PagedIcon, ScrollIcon, SkipNextIcon, SkipPrevIcon } from "./icons";
 import { PlaceholderPage } from "./placeholder-page";
+import { QuickScrubber } from "./quick-scrubber";
 
 /** Ignore forward gestures this soon after arriving on the end card (prevents skipping a chapter). */
 const END_CARD_GRACE_MS = 450;
@@ -174,16 +175,28 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
           <span className="reader__series">{series.title}</span>
           <span className="reader__chapter">{formatChapterLabel(chapter)}</span>
         </div>
-        <button
-          type="button"
-          className="icon-btn icon-btn--labeled"
-          onClick={toggleMode}
-          aria-label={mode === "vertical" ? "Switch to paged right-to-left mode" : "Switch to vertical scroll mode"}
-        >
-          {mode === "vertical" ? <PagedIcon /> : <ScrollIcon />}
-          <span>{mode === "vertical" ? "Paged" : "Scroll"}</span>
-        </button>
+        <div className="reader__actions-right">
+          <button
+            type="button"
+            className="icon-btn icon-btn--labeled"
+            onClick={toggleMode}
+            aria-label={mode === "vertical" ? "Switch to paged right-to-left mode" : "Switch to vertical scroll mode"}
+          >
+            {mode === "vertical" ? <PagedIcon /> : <ScrollIcon />}
+            <span>{mode === "vertical" ? "Paged" : "Scroll"}</span>
+          </button>
+          <Link href="/" className="icon-btn" aria-label="Home">
+            <HomeIcon />
+          </Link>
+        </div>
       </header>
+
+      <QuickScrubber
+        pageCount={pageCount}
+        currentPage={shownPage}
+        visible={controls}
+        onPageChange={(target) => goTo(target)}
+      />
 
       {mode === "vertical" ? (
         <VerticalPages
@@ -235,7 +248,12 @@ function ReaderSession({ series, chapter, prev, next }: SessionProps) {
         </div>
 
         {next ? (
-          <Link href={`/read/${series.id}/${next.id}`} className="icon-btn" aria-label={`Next chapter, ${formatChapterNumber(next.number)}`}>
+          <Link
+            href={`/read/${series.id}/${next.id}`}
+            className="icon-btn"
+            aria-label={`Next chapter, ${formatChapterNumber(next.number)}`}
+            onClick={() => actions.recordProgress(series, chapter.id, lastPage, true)}
+          >
             <SkipNextIcon />
           </Link>
         ) : (
