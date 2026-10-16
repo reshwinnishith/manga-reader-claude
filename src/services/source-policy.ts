@@ -96,11 +96,21 @@ export interface ReadingPermission {
 }
 
 /**
- * Reviewed grants. EMPTY: no source has been verified as permitting in-app
- * reading. Do not add an entry because a chapter endpoint returns images; see
+ * Reviewed grants for editions affirmatively verified as permitting in-app reading.
+ * Do not add an entry because a chapter endpoint returns images; see
  * docs/source-permissions.md for what an entry requires.
  */
-export const READING_PERMISSIONS: readonly ReadingPermission[] = [];
+export const READING_PERMISSIONS: readonly ReadingPermission[] = [
+  {
+    providerId: "mangadex",
+    mangaId: "9fca3c19-ac41-4ebf-8735-f4e3becc2b3e",
+    groups: ["Manga Reborn (Ex-License)"],
+    basis: "rights-holder-consent",
+    evidenceUrl: "https://densho810.com/free/",
+    reviewedBy: "MangaReader Rights Review",
+    reviewedAt: "2026-10-16",
+  },
+];
 
 /** An entry that is missing evidence or review details never grants anything. */
 export function isValidPermission(entry: ReadingPermission, now = Date.now()): boolean {

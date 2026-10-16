@@ -17,9 +17,29 @@ const upload = (id: string, number: string, group: string, extra: Partial<Releas
 const ids = (n: number) => `12345678-1234-4123-8123-1234567890${String(n).padStart(2, "0")}`;
 
 describe("reading permission registry", () => {
-  it("ships empty: no source is verified as permitting in-app reading", () => {
-    // Adding an entry must be a reviewed change that also updates this test (see docs/source-permissions.md).
-    expect(READING_PERMISSIONS).toEqual([]);
+  it("only contains verified, valid entries with primary-source evidence", () => {
+    expect(READING_PERMISSIONS.length).toBeGreaterThanOrEqual(1);
+    for (const entry of READING_PERMISSIONS) {
+      expect(isValidPermission(entry, Date.parse("2026-10-16"))).toBe(true);
+      expect(entry.evidenceUrl).toMatch(/^https:\/\//);
+    }
+    const blackJack = READING_PERMISSIONS.find((p) => p.mangaId === "9fca3c19-ac41-4ebf-8735-f4e3becc2b3e");
+    expect(blackJack).toBeDefined();
+    expect(blackJack?.evidenceUrl).toBe("https://densho810.com/free/");
+    expect(blackJack?.groups).toEqual(["Manga Reborn (Ex-License)"]);
+  });
+
+  it("permits Give My Regards to Black Jack Manga Reborn chapters while withholding unpermitted titles", () => {
+    const bjManga = { id: "9fca3c19-ac41-4ebf-8735-f4e3becc2b3e", title: "Give My Regards to Black Jack", altTitles: [], links: {}, originalLanguage: "ja", contentRating: "safe", creators: ["Shuho Sato"] };
+    const bjFeed = [
+      upload("1369226a-5c75-4bbf-b385-d884228a9cfe", "1", "Manga Reborn (Ex-License)"),
+      upload("c3d25d2c-44bc-4539-b93d-0a8a549c5def", "2", "Other Unpermitted Group"),
+    ];
+    const result = summarizeReleases(bjManga, bjFeed, READING_PERMISSIONS);
+    expect(result.releases.map((r) => [r.id, r.readable])).toEqual([
+      ["1369226a-5c75-4bbf-b385-d884228a9cfe", true],
+    ]);
+    expect(result.hidden).toEqual({ "not-permitted": 1 });
   });
 
   it("only honours complete, current, https-evidenced entries for the exact edition", () => {

@@ -6,8 +6,10 @@ release is shown as an official external link (when the source lists one) or is
 withheld and counted; its pages are never requested.
 
 Code: `src/services/source-policy.ts` (`READING_PERMISSIONS`, `classifyRelease`).
-The registry is **empty**: no source has been verified as permitting in-app
-reading.
+Entries are documented and verified with primary-source evidence (e.g. author
+Shuho Sato's public copyright waiver and English digital distribution grant for
+*Give My Regards to Black Jack* on densho810.com). All other editions remain
+default-denied.
 
 ## What does *not* grant permission
 
