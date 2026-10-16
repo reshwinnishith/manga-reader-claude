@@ -479,16 +479,110 @@ describe("Reader v1.1 · Navigation overlay, Quick scrubber & Auto-progress", ()
     expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 0, completed: false, atEnd: false });
   });
 
-  it("advancing to next chapter from footer automatically marks previous chapter complete", async () => {
+  it("advancing to next chapter from footer automatically marks previous chapter complete and persists after reload", async () => {
     const user = userEvent.setup();
-    const r = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
-    expect(chapterProgress(r, manga, 1)).toMatchObject({ page: 0, completed: false });
+    const r1 = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    expect(chapterProgress(r1, manga, 1)).toMatchObject({ page: 0, completed: false });
 
     const nextBtn = screen.getByRole("link", { name: /Next chapter, Ch\. 2/ });
     await user.click(nextBtn);
 
     // Current chapter is now marked completed
-    expect(chapterProgress(r, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+    expect(chapterProgress(r1, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+
+    // Simulate page reload with persisted data
+    const snapshot = r1.store.getSnapshot()!;
+    r1.unmount();
+
+    const r2 = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[1]!.id} />, snapshot);
+    expect(chapterProgress(r2, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+    expect(chapterProgress(r2, manga, 2)).toMatchObject({ page: 0, completed: false });
+    expect(screen.getByRole("img", { name: pageLabel(1, manga.chapters[1]!.pageCount) })).toBeInTheDocument();
+  });
+
+  it("advancing to next chapter from endcard completes chapter and persists across reloads", async () => {
+    const user = userEvent.setup();
+    const r1 = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[0]!.id} />, emptyUserData());
+    await tapNext(user, manga.chapters[0]!.pageCount);
+
+    const continueBtn = screen.getByRole("link", { name: "Continue to next chapter" });
+    await user.click(continueBtn);
+
+    expect(chapterProgress(r1, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+
+    const snapshot = r1.store.getSnapshot()!;
+    r1.unmount();
+
+    const r2 = renderWithApp(<ReaderView series={manga} chapterId={manga.chapters[1]!.id} />, snapshot);
+    expect(chapterProgress(r2, manga, 1)).toMatchObject({ completed: true, atEnd: true });
+    expect(screen.getByRole("img", { name: pageLabel(1, manga.chapters[1]!.pageCount) })).toBeInTheDocument();
+  });
+
+  it("single iPhone tap produces exactly one overlay toggle, deduplicating synthetic clicks", () => {
+    renderWithApp(<ReaderView series={manhwa} chapterId={manhwa.chapters[0]!.id} />, emptyUserData());
+    const scrollEl = document.querySelector(".reader__scroll")!;
+    const readerEl = scrollEl.closest(".reader")!;
+
+    expect(readerEl).toHaveAttribute("data-controls", "visible");
+
+    // Single iPhone tap: touchstart, touchend (zero movement), followed by synthetic click
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 200, clientY: 300 }] });
+    fireEvent.touchEnd(scrollEl, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+    fireEvent.click(scrollEl, { clientX: 200, clientY: 300 });
+
+    // Controls must toggle to hidden (not double-toggled back to visible)
+    expect(readerEl).toHaveAttribute("data-controls", "hidden");
+
+    // Second iPhone tap: toggles back to visible
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 200, clientY: 300 }] });
+    fireEvent.touchEnd(scrollEl, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+    fireEvent.click(scrollEl, { clientX: 200, clientY: 300 });
+
+    expect(readerEl).toHaveAttribute("data-controls", "visible");
+  });
+
+  it("swipe or drag scroll in vertical reader does not accidentally toggle overlay", () => {
+    renderWithApp(<ReaderView series={manhwa} chapterId={manhwa.chapters[0]!.id} />, emptyUserData());
+    const scrollEl = document.querySelector(".reader__scroll")!;
+    const readerEl = scrollEl.closest(".reader")!;
+
+    expect(readerEl).toHaveAttribute("data-controls", "visible");
+
+    // Touch drag (movement > 10px)
+    fireEvent.touchStart(scrollEl, { touches: [{ clientX: 200, clientY: 300 }] });
+    fireEvent.touchMove(scrollEl, { touches: [{ clientX: 200, clientY: 250 }] });
+    fireEvent.touchEnd(scrollEl, { changedTouches: [{ clientX: 200, clientY: 250 }] });
+    fireEvent.click(scrollEl, { clientX: 200, clientY: 250 });
+
+    // Controls must remain visible
+    expect(readerEl).toHaveAttribute("data-controls", "visible");
+  });
+
+  it("quick scrubbing to final page in vertical scroll mode does not automatically mark chapter complete", () => {
+    const pageH = 500;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 390, width: 390, x: 0, y: top, toJSON() {} }) as DOMRect;
+      if (this.classList.contains("quick-scrubber__hit-area")) return rect(100, 400);
+      if (this.classList.contains("reader__scroll")) return rect(0, 800);
+      if (this.dataset.page !== undefined) return rect(Number(this.dataset.page) * pageH, pageH);
+      if (this.id === "reader-end") return rect(manhwa.chapters[0]!.pageCount * pageH, 600);
+      return rect(0, 0);
+    });
+
+    const r = renderWithApp(<ReaderView series={manhwa} chapterId={manhwa.chapters[0]!.id} />, emptyUserData());
+    const scrubber = screen.getByRole("slider", { name: "Quick page scrubber" });
+
+    // Scrub directly to bottom (fraction 1.0 -> final page)
+    fireEvent.pointerDown(scrubber, { clientY: 500, pointerId: 1 });
+    fireEvent.pointerMove(scrubber, { clientY: 500, pointerId: 1 });
+    fireEvent.pointerUp(scrubber, { clientY: 500, pointerId: 1 });
+
+    // In vertical mode, scrubbing to the final page must not prematurely complete the chapter
+    expect(chapterProgress(r, manhwa, 1)).toMatchObject({
+      page: manhwa.chapters[0]!.pageCount - 1,
+      completed: false,
+      atEnd: false,
+    });
   });
 
   it("quick scrubber is visible when controls are visible and hidden when controls are hidden", async () => {

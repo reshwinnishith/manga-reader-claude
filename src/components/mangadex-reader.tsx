@@ -144,6 +144,8 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
   const [navAttempt, setNavAttempt] = useState(0);
   const content = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number; time: number } | null>(null);
+  const lastTouchTime = useRef(0);
+  const scrubTime = useRef(0);
 
   const toggleControls = useCallback(() => setControls((c) => !c), [setControls]);
   const { previous, next } = readerNeighbors(chapters, id);
@@ -228,11 +230,12 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
         for (const element of pages) {
           if (element.getBoundingClientRect().top <= window.innerHeight / 2) current = Number(element.dataset.page);
         }
+        const justScrubbed = Date.now() - scrubTime.current < 600;
         const endEl = document.getElementById("source-reader-end");
-        if (endEl && endEl.getBoundingClientRect().top <= window.innerHeight) {
+        if (!justScrubbed && endEl && endEl.getBoundingClientRect().top <= window.innerHeight) {
           current = info.pageCount - 1;
           setAtEnd(true);
-        } else if (current < info.pageCount - 1) {
+        } else if (current < info.pageCount - 1 || justScrubbed) {
           setAtEnd(false);
         }
         setPage(current);
@@ -272,11 +275,13 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
         currentPage={page}
         visible={controls}
         onPageChange={(target) => {
-          setPage(target);
+          scrubTime.current = Date.now();
+          const clamped = Math.max(0, Math.min(target, info.pageCount - 1));
+          setPage(clamped);
           setAtEnd(false);
           if (mode === "scroll") {
-            const el = document.querySelector(`[data-page="${target}"]`);
-            el?.scrollIntoView({ block: "start" });
+            const el = document.querySelector(`[data-page="${clamped}"]`);
+            typeof el?.scrollIntoView === "function" && el.scrollIntoView({ block: "start" });
           }
         }}
       />
@@ -295,6 +300,7 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
           touch.current = point ? { x: point.clientX, y: point.clientY, time: Date.now() } : null;
         }}
         onTouchEnd={(event) => {
+          lastTouchTime.current = Date.now();
           if ((event.target as HTMLElement)?.closest?.("button, a, input, textarea, select, label, .quick-scrubber")) {
             touch.current = null;
             return;
@@ -324,6 +330,7 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
             return;
           }
           if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+            lastTouchTime.current = Date.now();
             if (mode === "paged") {
               const width = window.innerWidth;
               if (point.clientX < width * 0.35) {
@@ -350,8 +357,28 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
         }}
         onClick={(event) => {
           if ((event.target as HTMLElement)?.closest?.("button, a, input, textarea, select, label, .quick-scrubber")) return;
+          if (Date.now() - lastTouchTime.current < 600) return;
           if (mode === "scroll") {
             toggleControls();
+          } else {
+            const width = window.innerWidth;
+            if (event.clientX < width * 0.35) {
+              if (page < info.pageCount - 1) {
+                setPage((p) => p + 1);
+                setAtEnd(false);
+              } else {
+                setAtEnd(true);
+              }
+            } else if (event.clientX > width * 0.65) {
+              if (atEnd) {
+                setAtEnd(false);
+              } else {
+                setPage((p) => Math.max(0, p - 1));
+                setAtEnd(false);
+              }
+            } else {
+              toggleControls();
+            }
           }
         }}
         className={mode === "paged" ? "source-reader__pages source-reader__pages--paged" : "source-reader__pages"}
@@ -424,11 +451,7 @@ function LoadedReader({ id, info, data, actions, controls, setControls }: { id: 
       {mode === "scroll" && (
         <div id="source-reader-end" className="source-reader__end">
           <p className="source-reader__complete-label">
-            {atEnd
-              ? "Chapter complete."
-              : !reachedFinalPage
-              ? "Scroll to the final page to complete this chapter."
-              : "Chapter complete."}
+            {atEnd ? "Chapter complete." : "Scroll to the final page to complete this chapter."}
           </p>
           {atEnd && next && (
             <div className="source-reader__next-action">

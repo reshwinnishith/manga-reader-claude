@@ -18,6 +18,8 @@ const release = (chapterId: string, number: string, extra: Record<string, unknow
   id: chapterId, number, volume: "", title: "", language: "en", pages: 3, groups: ["Test team"], publishedAt: "2026-01-01", readable: true, ...extra,
 });
 
+Element.prototype.scrollIntoView = () => {};
+
 beforeEach(() => {
   vi.stubGlobal("scrollTo", vi.fn());
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -332,5 +334,63 @@ it("advancing to next chapter from bottom bar marks the current chapter complete
     atEnd: true,
     completed: true,
   });
+});
+
+it("single iPhone tap produces exactly one overlay toggle in scroll mode, ignoring synthetic clicks", async () => {
+  const data = initial();
+  renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, data);
+
+  await screen.findByRole("img", { name: "Page 1" });
+  const surface = document.querySelector(".source-reader__pages")!;
+  const readerEl = document.querySelector(".source-reader")!;
+
+  expect(readerEl).toHaveAttribute("data-controls", "visible");
+
+  // Simulate iPhone single tap: touchStart + touchEnd + synthetic click
+  fireEvent.touchStart(surface, { touches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.click(surface, { clientX: 200, clientY: 300 });
+
+  expect(readerEl).toHaveAttribute("data-controls", "hidden");
+
+  // Second iPhone single tap: toggles back to visible
+  fireEvent.touchStart(surface, { touches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.touchEnd(surface, { changedTouches: [{ clientX: 200, clientY: 300 }] });
+  fireEvent.click(surface, { clientX: 200, clientY: 300 });
+
+  expect(readerEl).toHaveAttribute("data-controls", "visible");
+});
+
+it("quick scrubbing to the final page in scroll mode does not automatically mark chapter complete", async () => {
+  const PAGE_H = 600;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    cb(0);
+    return 1;
+  });
+
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 390, width: 390, x: 0, y: top, toJSON() {} }) as DOMRect;
+    if (this.classList.contains("quick-scrubber__hit-area")) return rect(100, 400);
+    if (this.dataset.page !== undefined) return rect(Number(this.dataset.page) * PAGE_H, PAGE_H);
+    if (this.id === "source-reader-end") return rect(3 * PAGE_H, 400);
+    return rect(0, 0);
+  });
+
+  const { store } = renderWithApp(<MangaDexReader id={id} group="" seriesId={title.id} />, initial());
+  await screen.findByRole("img", { name: "Page 1" });
+
+  const scrubber = screen.getByRole("slider", { name: "Quick page scrubber" });
+
+  // Quick scrub to the final page (page 3, index 2)
+  fireEvent.pointerDown(scrubber, { clientY: 500, pointerId: 1 });
+  fireEvent.pointerMove(scrubber, { clientY: 500, pointerId: 1 });
+  fireEvent.pointerUp(scrubber, { clientY: 500, pointerId: 1 });
+
+  // Must update indicator to Page 3 / 3
+  expect(screen.getByText("Page 3 / 3")).toBeInTheDocument();
+
+  // Scrubbing to final page must NOT mark the chapter completed
+  expect(store.getSnapshot()?.progress[title.id]?.chapters[id]?.completed).toBeFalsy();
+  expect(screen.getByText(/Scroll to the final page to complete/)).toBeInTheDocument();
 });
 
